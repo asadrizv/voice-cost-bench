@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.env
+node_modules/
+.next/
+frontend/test-results/
+frontend/playwright-report/
+results/
+!results/.gitkeep

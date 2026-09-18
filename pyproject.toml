@@ -1,0 +1,79 @@
+[project]
+name = "voice-cost-bench"
+version = "0.1.0"
+description = "Same conversation, two voice pipelines, live cost and latency."
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "pyyaml>=6.0",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
+    "httpx>=0.28",
+    "websockets>=14",
+    "openai>=1.57",
+    "livekit>=1.0",
+    "livekit-api>=1.0",
+    "livekit-agents>=1.0",
+    "numpy>=2.0",
+    "prometheus-client>=0.21",
+    "sse-starlette>=2.1",
+]
+
+[project.optional-dependencies]
+gpu = ["nvidia-ml-py>=12.560"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "mypy>=1.13",
+    "ruff>=0.8",
+    "types-PyYAML",
+    "aiosqlite>=0.20",
+    "jiwer>=3.0",
+    "pytest-timeout>=2.4.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+markers = [
+    "paid: calls a real paid provider; opt-in with -m paid",
+    "postgres: needs a running Postgres at TEST_DATABASE_URL",
+]
+addopts = "-m 'not paid'"
+
+[tool.coverage.run]
+source = ["backend/domain", "backend/application"]
+omit = ["*/ports/*"]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+exclude_also = ["\\.\\.\\.$", "if TYPE_CHECKING:", "raise NotImplementedError"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["backend/domain", "backend/application"]
+strict = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["frontend", "backend/infrastructure/persistence/migrations/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "ASYNC"]
