@@ -1,0 +1,6 @@
+[
+  { "targets": ["host.docker.internal:8000"], "labels": { "service": "vllm" } },
+  { "targets": ["host.docker.internal:8001"], "labels": { "service": "whisper" } },
+  { "targets": ["host.docker.internal:8002"], "labels": { "service": "kokoro" } },
+  { "targets": ["host.docker.internal:9400"], "labels": { "service": "dcgm" } }
+]

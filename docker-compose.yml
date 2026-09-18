@@ -1,0 +1,64 @@
+# Local stack, one command: `make up`. The GPU services run elsewhere (gpu/).
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment: { POSTGRES_USER: vcb, POSTGRES_PASSWORD: vcb, POSTGRES_DB: vcb }
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vcb"]
+      interval: 2s
+      retries: 20
+
+  livekit:
+    image: livekit/livekit-server:v1.13.7
+    command: --dev --bind 0.0.0.0 --node-ip 127.0.0.1
+    ports: ["7880:7880", "7881:7881", "7882:7882/udp"]
+
+  api:
+    build: .
+    env_file: [{ path: .env, required: false }]
+    environment:
+      DATABASE_URL: postgresql://vcb:vcb@postgres:5432/vcb
+      LIVEKIT_URL: ws://livekit:7880
+      LIVEKIT_PUBLIC_URL: ${LIVEKIT_PUBLIC_URL:-ws://localhost:7880}
+    ports: ["8080:8080"]
+    volumes: [./results:/app/results]
+    depends_on: { postgres: { condition: service_healthy } }
+
+  agent:
+    build: .
+    command: ["python", "-m", "backend.interfaces.agent.livekit_agent", "start"]
+    env_file: [{ path: .env, required: false }]
+    environment:
+      DATABASE_URL: postgresql://vcb:vcb@postgres:5432/vcb
+      LIVEKIT_URL: ${LIVEKIT_AGENT_URL:-ws://livekit:7880}
+      API_BASE_URL: http://api:8080
+    depends_on: [api, livekit]
+
+  frontend:
+    build: { context: frontend, args: { NEXT_PUBLIC_API_URL: "http://localhost:8080" } }
+    ports: ["3000:3000"]
+    depends_on: [api]
+
+  prometheus:
+    image: prom/prometheus:v3.13.3
+    volumes:
+      - ./config/prometheus:/etc/prometheus:ro
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    ports: ["9090:9090"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+
+  grafana:
+    image: grafana/grafana:13.0.9
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+    volumes:
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["3001:3000"]
+    depends_on: [prometheus]
+
+volumes:
+  pgdata:

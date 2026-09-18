@@ -1,0 +1,42 @@
+# Self-hosted stack on one GPU node (Scaleway, OVH, Nebius, or any VM with Docker and the
+# NVIDIA container toolkit). On a RunPod *pod* there is no Docker daemon: use
+# gpu/runpod/ instead, which runs the same three services in one container.
+x-gpu: &gpu
+  deploy:
+    resources:
+      reservations:
+        devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]
+  restart: unless-stopped
+
+services:
+  vllm:
+    <<: *gpu
+    image: vllm/vllm-openai:v0.29.0   # pin; record it in provenance via /version
+    command: ["--config", "/config/serving/${SERVING_CONFIG:-qwen-9b-l40s.yaml}"]
+    environment: { HF_TOKEN: "${HF_TOKEN:-}" }
+    volumes:
+      - ../config/serving:/config/serving:ro
+      - hf-cache:/root/.cache/huggingface
+    ports: ["8000:8000"]
+    ipc: host
+
+  whisper:
+    <<: *gpu
+    build: { context: ., dockerfile: whisper_service/Dockerfile }
+    environment: { WHISPER_MODEL: large-v3-turbo, WHISPER_WORKERS: "3" }
+    ports: ["8001:8001"]
+
+  kokoro:
+    <<: *gpu
+    build: { context: ., dockerfile: kokoro_service/Dockerfile }
+    environment: { KOKORO_WORKERS: "3" }
+    ports: ["8002:8002"]
+
+  dcgm-exporter:
+    <<: *gpu
+    image: nvcr.io/nvidia/k8s/dcgm-exporter:4.2.3-4.1.3-ubuntu22.04
+    cap_add: [SYS_ADMIN]
+    ports: ["9400:9400"]
+
+volumes:
+  hf-cache:

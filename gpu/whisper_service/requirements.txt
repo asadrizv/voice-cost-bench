@@ -1,0 +1,5 @@
+fastapi>=0.115
+uvicorn[standard]>=0.32
+faster-whisper>=1.1
+numpy>=2.0
+prometheus-client>=0.21

@@ -1,0 +1,9 @@
+.venv
+frontend
+**/__pycache__
+.git
+results
+fixtures/audio/wer
+.mypy_cache
+.pytest_cache
+.ruff_cache

@@ -71,7 +71,7 @@ def create_token(
     )
     return TokenResponse(
         token=token,
-        url=s.livekit_url,
+        url=s.livekit_public_url or s.livekit_url,
         room=call_id,
         call_id=call_id,
         pipeline=pipeline,

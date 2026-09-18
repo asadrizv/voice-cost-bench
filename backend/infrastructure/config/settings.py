@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     endpointer: str = Field("semantic", description="semantic | silence")
 
     livekit_url: str = "ws://localhost:7880"
+    livekit_public_url: str = ""
+    """What the browser dials, when it differs from the agent's address (Docker)."""
     livekit_api_key: str = "devkey"
     livekit_api_secret: str = "secret"
 
@@ -41,7 +43,11 @@ class Settings(BaseSettings):
     api_base_url: str = "http://localhost:8080"
     """Where the agent worker forwards live metrics for SSE and Prometheus."""
     internal_token: str = "dev-internal-token"
+    cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
+    simulate_providers: bool = False
+    """Both pipelines resolve to the simulated GPU model: runs the whole stack (LiveKit,
+    agent, browser) with no keys and no GPU. Every cost it produces is fiction."""
     dev_spend_limit_usd: float = 25.0
     selfhosted_max_concurrency: int = 40
 

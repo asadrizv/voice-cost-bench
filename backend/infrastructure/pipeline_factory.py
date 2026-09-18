@@ -48,6 +48,25 @@ def _selfhosted(s: Settings) -> Pipeline:
     )
 
 
+def _simulated(kind: PipelineKind) -> Callable[[Settings], Pipeline]:
+    def build(s: Settings) -> Pipeline:
+        import yaml
+
+        from backend.infrastructure.simulated.gpu_model import (
+            SimulatedGpu,
+            SimulatedLlm,
+            SimulatedStt,
+            SimulatedTts,
+        )
+
+        spec = yaml.safe_load((s.config_dir.parent / "fixtures" / "conversations.yaml").read_text())
+        gpu = SimulatedGpu()
+        script = spec["conversations"]["intake_en"]["turns"]
+        return Pipeline(kind, SimulatedStt(gpu, script), SimulatedLlm(gpu), SimulatedTts(gpu), True)
+
+    return build
+
+
 BUILDERS: dict[PipelineKind, Callable[[Settings], Pipeline]] = {
     PipelineKind.API: _api,
     PipelineKind.SELFHOSTED: _selfhosted,
@@ -64,6 +83,8 @@ class PipelineFactory:
         builders: dict[PipelineKind, Callable[[Settings], Pipeline]] | None = None,
     ) -> None:
         self._settings = settings
+        if builders is None and settings.simulate_providers:
+            builders = {kind: _simulated(kind) for kind in PipelineKind}
         self._builders = builders or BUILDERS
         self._cache: dict[PipelineKind, Pipeline] = {}
 

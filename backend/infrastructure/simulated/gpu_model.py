@@ -13,6 +13,8 @@ import random
 from collections.abc import AsyncIterable, AsyncIterator, Sequence
 from dataclasses import dataclass
 
+import numpy as np
+
 from backend.application.ports.llm_port import ChatMessage, LlmEvent, TokenDelta, TokenUsage
 from backend.application.ports.stt_port import FlushSignal, TranscriptEvent
 from backend.domain.entities.persona import SamplingParams
@@ -52,6 +54,16 @@ class SimulatedGpu:
             await asyncio.sleep(self.jitter(self.profile.stt_final_ms))
 
 
+def _voiced(chunk: AudioChunk) -> bool:
+    samples = np.frombuffer(chunk.data, dtype="<i2").astype(np.float32)
+    return bool(samples.size) and float(np.sqrt(np.mean(samples**2))) > 32768 * 0.0056  # -45 dBFS
+
+
+# A quiet 40 ms, 220 Hz tone (whole cycles, so frames join without clicks): simulated
+# speech you can hear in a browser demo, distinct from any real voice.
+_TONE = (0.08 * 32767 * np.sin(2 * np.pi * 220 * np.arange(960) / 24000)).astype("<i2").tobytes()
+
+
 class SimulatedStt:
     """Emits the caller's next scripted line as an interim once they've been speaking a
     moment (so semantic endpointing has words to judge, as with a real STT), and as the
@@ -64,20 +76,21 @@ class SimulatedStt:
     async def stream(
         self, audio: AsyncIterable[AudioChunk | FlushSignal], language: str
     ) -> AsyncIterator[TranscriptEvent]:
+        script = list(self._script)  # per call: one adapter instance may serve many calls
         speech_s = 0.0
         announced = False
         async for item in audio:
             if isinstance(item, FlushSignal):
                 await self._gpu.stt_final()
-                text = self._script.pop(0) if self._script else ""
+                text = script.pop(0) if script else ""
                 speech_s, announced = 0.0, False
                 yield TranscriptEvent(text, is_final=True, flushed=True)
-            elif any(item.data):
+            elif _voiced(item):
                 speech_s += item.duration_seconds
                 threshold = self._gpu.profile.interim_after_speech_s
-                if not announced and self._script and speech_s >= threshold:
+                if not announced and script and speech_s >= threshold:
                     announced = True
-                    yield TranscriptEvent(self._script[0], is_final=False)
+                    yield TranscriptEvent(script[0], is_final=False)
 
 
 _REPLIES = [
@@ -128,7 +141,6 @@ class SimulatedTts:
             await asyncio.sleep(gpu.jitter(p.tts_first_byte_ms))
             frames = max(1, int(audio_s / 0.04))
             for i in range(frames):
-                # Low-amplitude tone so energy-based checks see "audio".
-                yield AudioChunk(bytes([0x40, 0x06]) * (frame // 2), PCM16_24K_MONO)
+                yield AudioChunk(_TONE[:frame], PCM16_24K_MONO)
                 if i % 10 == 9:
                     await asyncio.sleep(0.4 * p.tts_realtime_factor)

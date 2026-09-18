@@ -1,0 +1,36 @@
+groups:
+  - name: voice
+    rules:
+      - alert: VllmQueueing
+        # vLLM is admitting more than it can run: every waiting request adds its wait to TTFT.
+        expr: max(vllm:num_requests_waiting) > 0
+        for: 30s
+        labels: { severity: warning }
+        annotations: { summary: "vLLM has had requests waiting for 30s" }
+      - alert: KvCacheNearlyFull
+        # Precedes preemption; preemption precedes the p95 collapse. Metric renamed in vLLM v1.
+        expr: max(vllm:kv_cache_usage_perc or vllm:gpu_cache_usage_perc) > 0.9
+        for: 15s
+        labels: { severity: warning }
+        annotations: { summary: "vLLM KV cache above 90%" }
+      - alert: VllmPreempting
+        expr: increase(vllm:num_preemptions_total[1m]) > 0
+        labels: { severity: critical }
+        annotations: { summary: "vLLM is preempting sequences (KV cache thrashing)" }
+      - alert: EndToEndP95OverBudget
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le, pipeline) (rate(voice_turn_latency_ms_bucket{stage="end_to_end"}[2m]))
+          ) > 900
+        for: 1m
+        labels: { severity: critical }
+        annotations: { summary: "{{ $labels.pipeline }} end-to-end p95 above 900 ms" }
+      - alert: SpendOverBudget
+        expr: voice_spend_usd{pipeline="api"} > 25
+        labels: { severity: warning }
+        annotations: { summary: "API pipeline spend is over DEV_SPEND_LIMIT_USD" }
+      - alert: SttOrTtsQueueing
+        expr: max(whisper_waiting) > 0 or max(kokoro_waiting) > 0
+        for: 15s
+        labels: { severity: warning }
+        annotations: { summary: "Whisper or Kokoro worker pool is saturated" }

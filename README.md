@@ -1,0 +1,121 @@
+# Voice Cost Bench
+
+One law-firm receptionist conversation, two interchangeable pipelines, live **cost per
+minute** and **latency** for both:
+
+| | STT | LLM | TTS |
+|---|---|---|---|
+| `api` | Deepgram Nova-3 | GPT-4o-mini | ElevenLabs Flash v2.5 |
+| `selfhosted` | faster-whisper large-v3-turbo | Qwen3.5-9B on vLLM | Kokoro |
+
+The self-hosted pipeline runs all three models on one L40S. The load harness finds the
+concurrency where its p95 latency breaks, and reports cost at stated utilisation.
+
+## Quick start (local, API pipeline)
+
+```bash
+cp .env.example .env        # add DEEPGRAM_API_KEY, OPENAI_API_KEY, ELEVENLABS_API_KEY
+make up                     # Postgres, LiveKit (dev), API, agent, frontend, Prometheus, Grafana
+open http://localhost:3000
+```
+
+No keys yet? Set `SIMULATE_PROVIDERS=true` in `.env`: both pipelines then run on a
+simulated GPU model and the whole stack works end to end. You hear a tone instead of a
+voice, and every cost is fiction.
+
+Without Docker: `make test-db migrate`, then `make dev-api`, `make dev-agent` and
+`make dev-frontend` in three terminals, with a LiveKit server or a LiveKit Cloud project in
+`.env`.
+
+## 5-minute demo script
+
+1. **Open http://localhost:3000.** The pipeline toggle reads *API stack*. Say what's
+   running: Deepgram, GPT-4o-mini and ElevenLabs, the stack most people would assemble.
+2. **Click Call and play the caller.** "Hi, I need to speak to someone about my landlord."
+   Clara asks for your name, the matter, urgency, then offers Tuesday at ten.
+   - Point at **Cost per minute** (the hero number) and **Where it went**: TTS dominates
+     the API bill.
+   - Point at **Latency**: the *Perceived delay* row runs from when you stop talking to
+     when Clara starts. That is what a caller feels, and it includes the endpointing
+     decision that time-to-first-token hides.
+   - Talk over Clara mid-sentence. She stops (barge-in), and the turn is marked
+     *interrupted*.
+3. **End the call and switch the toggle to *Self-hosted GPU*.** Run the same conversation.
+   The stage breakdown becomes GPU share plus telephony. The per-minute number here is for
+   *one* call on a whole GPU, which is the worst case, so say that out loud.
+4. **History** (`/calls`): both calls side by side. Click one for the **cost attribution**
+   table: units × rate = cost for every stage, including the GPU divisor. The same data
+   is a public endpoint: `GET /calls/{id}/cost`.
+5. **Benchmark** (`/benchmark`): cost per minute and p95 against concurrency on one L40S.
+   Lead with the **breaking point**, then the cheapest level within budget, then the
+   utilisation table: at 25% utilisation the GPU share is 4x, and at low volume
+   self-hosting can lose. That is the honest version, and it answers the CTO's first
+   question before they ask it.
+6. Optional: **Grafana** at http://localhost:3001 shows the call live (dashboard
+   *Voice Cost Bench*).
+
+Reset between runs with the **Reset** button. It clears the panels; nothing is deleted.
+
+## Producing the benchmark
+
+Run on the GPU node, so the network stays out of the numbers (see `gpu/README.md`):
+
+```bash
+make baseline      # API pipeline, 1 call at a time, 3 min → results/api_baseline.json
+make benchmark     # self-hosted: 1/5/10/20/40 concurrent, then onward until p95 > 900 ms
+make wer-audio wer # STT word error rate, English and German, both pipelines
+```
+
+`results/benchmark.json` is what `/benchmark` renders. Every run carries a provenance
+block: git SHA and dirty flag, model and pinned revision, vLLM version, serving-config hash,
+GPU SKU/region/price, rate-card date and hash, fixture audio hash, persona hash, endpointer.
+A level whose harness fell behind real time is flagged invalid rather than reported.
+
+`make benchmark-sim` runs the same sweep offline against a queueing model of the GPU. It
+exercises the harness; its output is stamped `simulated` and the UI says so.
+
+## Architecture
+
+Clean architecture: `domain` (pure) ← `application` (ports, use cases) ← `infrastructure`
+(adapters) ← `interfaces` (HTTP, LiveKit agent, CLI). No provider SDK is imported outside
+`infrastructure/`. `interfaces/container.py` is the only place that picks adapters.
+
+- **`CallSession`** runs a call end to end: audio in, VAD, endpointing, STT, LLM, TTS,
+  audio out, barge-in. The LiveKit agent and the load harness drive the *same* object, so
+  the benchmark measures what a caller hears.
+- **`ConcurrencySupervisor`** is the single count of active GPU calls. It rejects calls
+  above the ceiling and is the only source of the GPU cost divisor. Each call accrues
+  1/n of every second, so shares always sum to the busy time. The agent runs jobs as
+  threads so all calls share one supervisor.
+- **Endpointing** is a port with two implementations: fixed silence (baseline) and
+  semantic, which waits 250 ms after a finished sentence and up to 1.5 s after a dangling
+  "and my…".
+- **Prices** live only in `config/rates.yaml`. Sampling parameters and the no-thinking
+  switch live in the persona. vLLM flags live in `config/serving/<model>-<gpu>.yaml`.
+
+## Tests
+
+```bash
+make test    # unit + contract + integration + Postgres; 90% coverage gate on domain/application
+make lint    # ruff, mypy --strict (domain, application), tsc
+make e2e     # Playwright: Chromium's fake mic plays a fixture WAV into a real call
+make test-paid  # one real request per paid provider (cents)
+```
+
+Contract suites run the same tests against both implementations of each port: Deepgram
+against a server speaking its protocol from fixtures, Whisper and Kokoro against the real
+service code with the model stubbed, and OpenAI and vLLM over recorded SSE. Test runs cost
+nothing.
+
+## Caveats to state in any client conversation
+
+- **Rates were last verified 2026-09-17** (`config/rates.yaml`). Re-check before quoting;
+  L40S prices move fast.
+- **Telephony ($0.014/min) is in both pipelines** and becomes the largest line item once
+  the GPU is shared. It's identical on both sides, so it narrows the percentage saving.
+- **Kokoro has no German voice.** German self-hosted TTS needs a multilingual model
+  (Chatterbox Multilingual, Orpheus) before any German comparison is fair.
+- **The WER corpus is synthetic speech** (`fixtures/wer/README.md`). It's fine for
+  regression and head-to-head comparison, not for a published German WER.
+- **Quote loaded cost at a stated utilisation and concurrency**, never a bare per-minute
+  figure (see the utilisation table).

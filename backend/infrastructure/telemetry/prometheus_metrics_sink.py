@@ -43,6 +43,12 @@ class PrometheusMetricsSink:
             ["pipeline"],
             registry=self.registry,
         )
+        self._spend = Gauge(
+            "voice_spend_usd",
+            "Cumulative spend from Postgres, the source of truth (survives restarts)",
+            ["pipeline"],
+            registry=self.registry,
+        )
         self._closing_seen: set[str] = set()
 
     async def emit(self, event: CallMetricsEvent) -> None:
@@ -63,6 +69,9 @@ class PrometheusMetricsSink:
             self._active.labels(pipeline).dec()
         if event.elapsed_seconds > 0:
             self._cost_per_minute.labels(pipeline).set(event.cost_per_minute_usd)
+
+    def set_spend(self, pipeline: str, usd: float) -> None:
+        self._spend.labels(pipeline).set(usd)
 
     def _add_cost(self, pipeline: str, cost: dict[str, float]) -> None:
         for component, value in cost.items():

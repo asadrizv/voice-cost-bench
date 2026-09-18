@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+rule_files: [alerts.yml]
+
+scrape_configs:
+  - job_name: api
+    static_configs: [{ targets: ["api:8080"] }]
+  # GPU box: vLLM /metrics, DCGM exporter, whisper and kokoro services.
+  # Edit gpu_targets.json (or `make gpu-targets GPU_HOST=...`) when a pod starts.
+  - job_name: gpu
+    file_sd_configs: [{ files: [gpu_targets.json], refresh_interval: 10s }]

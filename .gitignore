@@ -14,3 +14,4 @@ frontend/playwright-report/
 results/
 !results/.gitkeep
 fixtures/audio/wer/
+.claude/launch.json

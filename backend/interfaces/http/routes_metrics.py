@@ -10,6 +10,7 @@ from fastapi.responses import PlainTextResponse
 from prometheus_client import generate_latest
 from sse_starlette.sse import EventSourceResponse
 
+from backend.domain.value_objects.pipeline_kind import PipelineKind
 from backend.infrastructure.config.settings import Settings
 from backend.infrastructure.telemetry.event_codec import decode, encode
 from backend.infrastructure.telemetry.inmemory_metrics_sink import InMemoryMetricsSink
@@ -63,4 +64,6 @@ async def prometheus_metrics(
     sink: Annotated[PrometheusMetricsSink, Depends(prometheus)],
     c: Annotated[Container, Depends(container)],
 ) -> str:
+    for kind in PipelineKind:
+        sink.set_spend(kind.value, await c.repository.total_spend_usd(kind))
     return generate_latest(sink.registry).decode()
