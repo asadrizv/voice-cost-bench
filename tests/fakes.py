@@ -72,8 +72,12 @@ class FakeLlm:
 
 class FakeTts:
     def __init__(
-        self, clock: FakeClock, first_byte_s: float = 0.1, chunks_per_sentence: int = 3,
-        chunk_bytes: int = 640, block: asyncio.Event | None = None,
+        self,
+        clock: FakeClock,
+        first_byte_s: float = 0.1,
+        chunks_per_sentence: int = 3,
+        chunk_bytes: int = 640,
+        block: asyncio.Event | None = None,
     ) -> None:
         self._clock = clock
         self._first = first_byte_s

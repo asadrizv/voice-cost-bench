@@ -1,0 +1,8 @@
+data: {"id":"cmpl-vllm","object":"chat.completion.chunk","created":1789000000,"model":"voice-llm","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"cmpl-vllm","object":"chat.completion.chunk","created":1789000000,"model":"voice-llm","choices":[{"index":0,"delta":{"content":"Of course."},"finish_reason":null}]}
+
+data: {"id":"cmpl-vllm","object":"chat.completion.chunk","created":1789000000,"model":"voice-llm","choices":[{"index":0,"delta":{"content":" May I have your name?"},"finish_reason":"stop"}]}
+
+data: [DONE]
+

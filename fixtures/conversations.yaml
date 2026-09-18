@@ -1,0 +1,28 @@
+# Caller side of scripted intake calls. Every pipeline, every load-test caller and every
+# benchmark run replays exactly these, so the only variable is the adapter triple.
+# Audio: fixtures/audio/<conversation>/<nn>.wav, 16 kHz mono PCM16, made by
+# `make fixtures` (macOS `say`). Synthetic speech: fine for latency and cost, NOT a valid
+# basis for a published WER; see fixtures/wer/README.md.
+conversations:
+  intake_en:
+    persona: law_firm
+    language: en
+    voice: Samantha
+    turns:
+      - "Hi, I need to speak to someone about my landlord."
+      - "My name is Anna Weber."
+      - "It's a tenancy issue. He's refusing to return my deposit and it's been three months."
+      - "Not really a deadline, but I'm moving abroad at the end of the month."
+      - "Tuesday at ten would be great."
+      - "It's anna dot weber at example dot com."
+  intake_de:
+    persona: law_firm_de
+    language: de
+    voice: Anna
+    turns:
+      - "Guten Tag, ich brauche Hilfe wegen meines Arbeitgebers."
+      - "Mein Name ist Jonas Becker."
+      - "Ich habe gestern eine fristlose Kündigung bekommen."
+      - "Ja, ich glaube, ich habe nur drei Wochen für eine Kündigungsschutzklage."
+      - "Dienstag um zehn Uhr passt mir gut."
+      - "Jonas Punkt Becker at example Punkt de."

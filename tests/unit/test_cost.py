@@ -41,7 +41,12 @@ class TestCostBreakdown:
         a = CostBreakdown(stt=Money.of(1), tts=Money.of(2))
         b = CostBreakdown(stt=Money.of(3), telephony=Money.of(4))
         assert (a + b).as_dict() == {
-            "stt": 4.0, "llm": 0.0, "tts": 2.0, "gpu": 0.0, "telephony": 4.0, "total": 10.0
+            "stt": 4.0,
+            "llm": 0.0,
+            "tts": 2.0,
+            "gpu": 0.0,
+            "telephony": 4.0,
+            "total": 10.0,
         }
 
 
@@ -80,9 +85,7 @@ def test_gpu_amortisation(gpu_seconds: float, concurrent: float, expected: Decim
         (20, 0.1, Decimal("1.09") / 1200 * 10),
     ],
 )
-def test_loaded_gpu_cost_per_minute(
-    concurrent: int, utilisation: float, expected: Decimal
-) -> None:
+def test_loaded_gpu_cost_per_minute(concurrent: int, utilisation: float, expected: Decimal) -> None:
     got = gpu_cost_per_minute_at(HOURLY, concurrent, utilisation).amount
     assert got == pytest.approx(expected)
 

@@ -1,0 +1,13 @@
+{
+  "interim": {"type": "Results", "channel_index": [0, 1], "duration": 1.2, "start": 0.0,
+              "is_final": false, "speech_final": false, "from_finalize": false,
+              "channel": {"alternatives": [{"transcript": "Hi, I need to speak", "confidence": 0.93, "words": []}]}},
+  "final":   {"type": "Results", "channel_index": [0, 1], "duration": 2.4, "start": 0.0,
+              "is_final": true, "speech_final": false, "from_finalize": false,
+              "channel": {"alternatives": [{"transcript": "Hi, I need to speak to someone", "confidence": 0.97, "words": []}]}},
+  "finalize":{"type": "Results", "channel_index": [0, 1], "duration": 0.8, "start": 2.4,
+              "is_final": true, "speech_final": true, "from_finalize": true,
+              "channel": {"alternatives": [{"transcript": "about my landlord.", "confidence": 0.96, "words": []}]}},
+  "metadata":{"type": "Metadata", "transaction_key": "deprecated", "request_id": "fixture",
+              "sha256": "", "created": "2026-09-17T10:00:00.000Z", "duration": 3.2, "channels": 1}
+}

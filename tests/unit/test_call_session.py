@@ -83,9 +83,7 @@ async def test_full_conversation_runs_and_is_accounted() -> None:
     call = await session.run(caller.frames())
 
     assert call.status is CallStatus.COMPLETED
-    assert [t.user_text for t in call.turns] == [
-        "", "I need a lawyer for my lease.", "Anna Weber."
-    ]
+    assert [t.user_text for t in call.turns] == ["", "I need a lawyer for my lease.", "Anna Weber."]
     assert call.turns[0].latency is None
     for turn in call.turns[1:]:
         assert turn.latency is not None
@@ -210,9 +208,7 @@ async def test_flush_timeout_falls_back_to_collected_text() -> None:
     session, _, ctx = await make_session(
         world, config=SessionConfig(tick_interval_s=0.001, flush_timeout_s=0.01)
     )
-    ctx.pipeline = Pipeline(
-        ctx.pipeline.kind, DeafStt(), ctx.pipeline.llm, ctx.pipeline.tts, False
-    )
+    ctx.pipeline = Pipeline(ctx.pipeline.kind, DeafStt(), ctx.pipeline.llm, ctx.pipeline.tts, False)
     caller = Caller(world, [600])
     caller.session = session
     call = await session.run(caller.frames())

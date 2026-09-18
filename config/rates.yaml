@@ -1,0 +1,16 @@
+# Single source of truth for every unit price. Nothing in code hardcodes a price.
+# verified 2026-09-17, re-check before any client demo
+verified_on: "2026-09-17"
+api:
+  stt:  { provider: deepgram, model: nova-3, unit: audio_minute, price_usd: 0.0043 }
+  llm:  { provider: openai, model: gpt-4o-mini,
+          input_per_1k_usd: 0.00015, output_per_1k_usd: 0.0006 }
+  tts:  { provider: elevenlabs, model: eleven_flash_v2_5, unit: 1k_characters, price_usd: 0.05 }
+selfhosted:
+  gpu:  { provider: runpod, sku: L40S, region: nl, cloud: secure, hourly_usd: 1.09 }
+  gpu_client_eu:                                            # for client quotes only
+    - { provider: scaleway, sku: L40S, region: par, hourly_usd: 1.40 }
+    - { provider: ovhcloud, sku: L40S, region: gra, hourly_usd: 1.69 }
+    - { provider: nebius,   sku: L40S, region: fi,  hourly_usd: 1.55 }
+telephony:
+  { provider: twilio, unit: minute, price_usd: 0.014 }

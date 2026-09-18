@@ -13,3 +13,4 @@ frontend/test-results/
 frontend/playwright-report/
 results/
 !results/.gitkeep
+fixtures/audio/wer/

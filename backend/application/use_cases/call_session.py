@@ -26,6 +26,7 @@ from backend.domain.value_objects.audio import AudioChunk
 class SessionConfig:
     barge_in_min_speech_ms: float = 300
     """Sustained caller speech needed to interrupt the agent; shorter trips on coughs."""
+    barge_in_gap_reset_ms: float = 200
     flush_timeout_s: float = 1.0
     tick_interval_s: float = 1.0
 
@@ -68,6 +69,7 @@ class CallSession:
         self._turn_task: asyncio.Task[None] | None = None
         self._turn_request: TurnRequest | None = None
         self._speech_run_ms = 0.0
+        self._gap_ms = 0.0
         self._carry_text = ""
         self._turn_error: BaseException | None = None
 
@@ -123,23 +125,32 @@ class CallSession:
         self._endpointer.observe_audio(speech, now)
 
         if self.agent_busy:
-            self._speech_run_ms = (
-                self._speech_run_ms + chunk.duration_seconds * 1000 if speech else 0
-            )
-            if self._speech_run_ms >= self._config.barge_in_min_speech_ms:
+            if self._barge_in_detected(speech, chunk.duration_seconds * 1000):
                 await self._barge_in()
             return
-        self._speech_run_ms = 0
+        self._speech_run_ms = self._gap_ms = 0.0
         if self._endpointer.should_commit(now):
             timeline = TurnTimeline(speech_end=self._endpointer.speech_end, endpoint=now)
             self._endpointer.reset()
             self._start_turn(TurnRequest(user_text="", output=self._output, timeline=timeline))
 
+    def _barge_in_detected(self, speech: bool, frame_ms: float) -> bool:
+        """Speech accumulates across short gaps between words and resets after a real pause,
+        so a sentence trips barge-in and a cough doesn't."""
+        if speech:
+            self._speech_run_ms += frame_ms
+            self._gap_ms = 0.0
+        else:
+            self._gap_ms += frame_ms
+            if self._gap_ms >= self._config.barge_in_gap_reset_ms:
+                self._speech_run_ms = 0.0
+        return self._speech_run_ms >= self._config.barge_in_min_speech_ms
+
     async def _barge_in(self) -> None:
         if self._turn_request is not None:
             self._turn_request.interrupt.set()
         await self._output.clear()
-        self._speech_run_ms = 0
+        self._speech_run_ms = self._gap_ms = 0.0
 
     def _start_turn(self, request: TurnRequest, transcribe: bool = True) -> None:
         self._turn_request = request

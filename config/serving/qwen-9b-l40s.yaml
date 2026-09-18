@@ -1,0 +1,12 @@
+# vLLM reads this directly: `vllm serve --config config/serving/qwen-9b-l40s.yaml`.
+# One file per (model, GPU) pair; tuning is GPU-specific.
+model: Qwen/Qwen3.5-9B
+revision: main                # TODO pin to a commit sha before any published benchmark
+served-model-name: voice-llm
+max-model-len: 8192           # short context buys KV cache, which buys concurrency
+max-num-seqs: 64
+gpu-memory-utilization: 0.72  # Whisper ~3GB + Kokoro ~1GB share the card
+enable-chunked-prefill: true
+enable-prefix-caching: true   # every turn re-sends the same system prompt
+enable-auto-tool-choice: true
+tool-call-parser: hermes

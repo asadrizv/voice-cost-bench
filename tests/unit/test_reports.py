@@ -36,9 +36,7 @@ async def test_call_cost_report_is_traceable_to_units_and_rates(world: World) ->
     assert report.cost_per_minute_usd == pytest.approx(
         report.cost.total.as_float() * 60 / report.duration_seconds
     )
-    assert report.projected_per_1000_minutes_usd == pytest.approx(
-        report.cost_per_minute_usd * 1000
-    )
+    assert report.projected_per_1000_minutes_usd == pytest.approx(report.cost_per_minute_usd * 1000)
     assert report.perceived_delay_p95_ms > 0
 
 
@@ -53,9 +51,7 @@ async def test_compare_pipelines_aggregates_per_pipeline(world: World) -> None:
     api, selfhosted = summary[PipelineKind.API], summary[PipelineKind.SELFHOSTED]
     assert api.calls == 2 and api.turns == 4
     assert api.total_minutes == pytest.approx(3.0, abs=0.05)  # fakes add ~0.4s per turn
-    assert api.cost_per_minute_usd == pytest.approx(
-        api.cost.total.as_float() / api.total_minutes
-    )
+    assert api.cost_per_minute_usd == pytest.approx(api.cost.total.as_float() / api.total_minutes)
     assert selfhosted.calls == 1
     assert selfhosted.cost.gpu.amount > 0 and selfhosted.cost.llm.amount == 0
     assert api.latency[LatencyStage.PERCEIVED_DELAY].count == 4

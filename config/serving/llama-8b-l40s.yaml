@@ -1,0 +1,9 @@
+# Fallback if Qwen misbehaves; same flags, different model.
+model: meta-llama/Llama-3.1-8B-Instruct
+revision: main                # TODO pin to a commit sha before any published benchmark
+served-model-name: voice-llm
+max-model-len: 8192
+max-num-seqs: 64
+gpu-memory-utilization: 0.72
+enable-chunked-prefill: true
+enable-prefix-caching: true
