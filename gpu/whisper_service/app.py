@@ -14,6 +14,7 @@ flush is answered exactly once, empty text included.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -213,10 +214,8 @@ def create_app(
         finally:
             if interim_task is not None:
                 interim_task.cancel()
-        try:
+        with contextlib.suppress(RuntimeError):  # already closed by the client
             await ws.close()
-        except RuntimeError:
-            pass
 
     @app.get("/health")
     async def health() -> dict[str, str]:

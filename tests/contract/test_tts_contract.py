@@ -110,8 +110,10 @@ async def test_elevenlabs_request_shape() -> None:
 
 
 async def test_kokoro_service_health_and_metrics() -> None:
-    async with run_asgi(create_app(StubSynth, workers=1)) as host:
-        async with httpx.AsyncClient(base_url=f"http://{host}") as client:
-            assert (await client.get("/health/deep")).json()["status"] == "ok"
-            metrics = (await client.get("/metrics")).text
+    async with (
+        run_asgi(create_app(StubSynth, workers=1)) as host,
+        httpx.AsyncClient(base_url=f"http://{host}") as client,
+    ):
+        assert (await client.get("/health/deep")).json()["status"] == "ok"
+        metrics = (await client.get("/metrics")).text
     assert "kokoro_waiting" in metrics and "kokoro_first_byte_ms" in metrics
