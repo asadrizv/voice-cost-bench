@@ -100,3 +100,12 @@ def test_features_match_the_whisper_extractor_the_model_was_trained_with() -> No
     ).input_features
 
     assert smart_turn.log_mel_features(audio) == pytest.approx(expected, abs=1e-4)
+
+
+@needs_audio
+def test_the_function_the_container_injects_asks_the_real_model() -> None:
+    """The container passes `probability`, not the model object: a live call found that
+    wiring broken while every stub-backed test passed, and the detector's fallback hid it
+    behind the silence ceiling."""
+    cached_model()
+    assert smart_turn.probability(pcm16(COMPLETE)) > 0.5

@@ -325,7 +325,9 @@ class SmartTurnEndpointDetector:
         try:
             self._verdict, inference_ms = decided.result()
         except Exception:
-            log.warning("Smart Turn inference failed; holding for the silence ceiling")
+            log.warning(
+                "Smart Turn inference failed; holding for the silence ceiling", exc_info=True
+            )
             return
         self._inference_ms.append(inference_ms)
 
