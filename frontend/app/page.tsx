@@ -10,7 +10,9 @@ import { Transcript } from "@/components/Transcript";
 import { api, type Pipeline, type TokenResponse } from "@/lib/api";
 import { useLiveMetrics } from "@/lib/useLiveMetrics";
 
-function StatusListener({ onStatus }: { onStatus: (s: { state: string; reason?: string }) => void }) {
+type CallStatus = { state: string; reason?: string; ended_by?: string };
+
+function StatusListener({ onStatus }: { onStatus: (s: CallStatus) => void }) {
   useDataChannel("call-status", (msg) => {
     try {
       onStatus(JSON.parse(new TextDecoder().decode(msg.payload)));
@@ -29,8 +31,12 @@ export default function CallPage() {
   const [callId, setCallId] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const live = useLiveMetrics(callId);
   const [env, setEnv] = useState<{ local: boolean; simulated: boolean }>({ local: false, simulated: false });
+  // Calling before the server's default pipeline arrives would silently use the toggle's
+  // initial value; a keyless API pipeline then rejects the call.
+  const [configLoaded, setConfigLoaded] = useState(false);
   useEffect(() => {
     api
       .config()
@@ -38,11 +44,13 @@ export default function CallPage() {
         setEnv({ local: Boolean(c.selfhosted_on_local_machine), simulated: Boolean(c.simulated) });
         if (c.default_pipeline === "api" || c.default_pipeline === "selfhosted") setPipeline(c.default_pipeline);
       })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => setConfigLoaded(true));
   }, []);
 
   const start = useCallback(async () => {
     setError(null);
+    setNotice(null);
     setConnecting(true);
     try {
       const token = await api.token({ pipeline, persona, endpointer });
@@ -60,6 +68,7 @@ export default function CallPage() {
     setSession(null);
     setCallId(null);
     setError(null);
+    setNotice(null);
   }, []);
 
   return (
@@ -81,11 +90,12 @@ export default function CallPage() {
           <option value="semantic">Semantic endpointing</option>
           <option value="silence">Silence threshold</option>
         </select>
-        <CallButton active={!!session} connecting={connecting} onStart={start} onEnd={end} />
+        <CallButton active={!!session} connecting={connecting || !configLoaded} onStart={start} onEnd={end} />
         <button type="button" className="btn ghost" onClick={reset} disabled={!!session}>Reset</button>
       </div>
 
       {error && <div className="banner error" role="alert">{error}</div>}
+      {notice && !session && <div className="banner" role="status" data-testid="call-notice">{notice}</div>}
       {env.simulated && (
         <div className="banner warn" role="note">
           <strong>Simulated providers.</strong> Replies are a tone and a fixed script; costs are fiction.
@@ -110,6 +120,10 @@ export default function CallPage() {
                 setSession(null);
               }
               if (s.state === "failed") setError("The call failed on the server; see agent logs.");
+              if (s.state === "ended" && s.ended_by === "agent") {
+                setNotice("Clara ended the call.");
+                setSession(null);
+              }
             }}
           />
         </LiveKitRoom>

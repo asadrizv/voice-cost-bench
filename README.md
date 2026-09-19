@@ -23,6 +23,21 @@ No keys yet? Set `SIMULATE_PROVIDERS=true` in `.env`: both pipelines then run on
 simulated GPU model and the whole stack works end to end. You hear a tone instead of a
 voice, and every cost is fiction.
 
+**Fully local, real voices, no keys (Apple Silicon):** the self-hosted pipeline runs on the
+Mac itself: Qwen 3.5 9B via Ollama, Whisper via MLX, Kokoro on CPU.
+
+```bash
+brew install ollama livekit && ollama pull qwen3.5:9b
+uv sync --extra local
+```
+
+Then run `ollama serve`, `livekit-server --dev`, the Whisper and Kokoro services
+(`WHISPER_BACKEND=mlx uv run --extra local uvicorn gpu.whisper_service.app:app --factory
+--port 8001`, same for `gpu.kokoro_service` on 8002), and the API and agent with
+`LLM_SERVER=ollama VLLM_BASE_URL=http://localhost:11434/v1 VLLM_MODEL=qwen3.5:9b
+SELFHOSTED_ON_LOCAL_MACHINE=true`. Latency on a laptop is not a benchmark figure; the call
+screen says so.
+
 Without Docker: `make test-db migrate`, then `make dev-api`, `make dev-agent` and
 `make dev-frontend` in three terminals, with a LiveKit server or a LiveKit Cloud project in
 `.env`.
@@ -40,6 +55,8 @@ Without Docker: `make test-db migrate`, then `make dev-api`, `make dev-agent` an
      decision that time-to-first-token hides.
    - Talk over Clara mid-sentence. She stops (barge-in), and the turn is marked
      *interrupted*.
+   - Say goodbye. Clara says goodbye back and hangs up herself; talk over her goodbye and
+     she stays on the line.
 3. **End the call and switch the toggle to *Self-hosted GPU*.** Run the same conversation.
    The stage breakdown becomes GPU share plus telephony. The per-minute number here is for
    *one* call on a whole GPU, which is the worst case, so say that out loud.

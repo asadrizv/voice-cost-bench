@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import threading
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -32,6 +33,23 @@ from backend.interfaces.container import build_container
 from backend.interfaces.http.routes_token import AGENT_NAME
 
 log = logging.getLogger("voice-cost-bench.agent")
+
+# livekit-rtc 1.1.18 panics ("timed out waiting for ReadyForRoomEventRequest after
+# ConnectCallback") when job threads of a fresh worker join rooms at the same moment:
+# reproduced 4/4 with three simultaneous calls, 0/3 with the process executor. We need
+# threads so calls share one ConcurrencySupervisor, so room joins take turns instead.
+_ROOM_JOIN = threading.Lock()
+
+
+@contextlib.asynccontextmanager
+async def _connect_lock() -> AsyncIterator[None]:
+    # Acquired off the event loop: each job thread has its own loop, and blocking one
+    # while another joins would stall that call's audio.
+    await asyncio.to_thread(_ROOM_JOIN.acquire)
+    try:
+        yield
+    finally:
+        _ROOM_JOIN.release()
 
 
 def _call_options(ctx: JobContext) -> dict[str, Any]:
@@ -77,7 +95,8 @@ async def entrypoint(ctx: JobContext) -> None:
     persona = options.get("persona", settings.persona)
     endpointer = options.get("endpointer", settings.endpointer)
 
-    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
+    async with _connect_lock():
+        await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
     participant = await ctx.wait_for_participant()
     track = await _first_audio_track(ctx, participant)
 
@@ -125,7 +144,8 @@ async def entrypoint(ctx: JobContext) -> None:
 
         try:
             call = await session.run(until_hang_up())
-            await _status(ctx, state="ended", call_id=call.id)
+            ended_by = "agent" if session.agent_hung_up else "caller"
+            await _status(ctx, state="ended", call_id=call.id, ended_by=ended_by)
         except Exception:
             log.exception("call %s failed", call_ctx.call.id)
             await _status(ctx, state="failed", call_id=call_ctx.call.id)

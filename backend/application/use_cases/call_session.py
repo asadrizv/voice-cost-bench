@@ -15,6 +15,7 @@ from backend.application.ports.metrics_sink import CallMetricsEvent, MetricsSink
 from backend.application.ports.stt_port import FlushSignal
 from backend.application.ports.vad_port import VoiceActivityDetector
 from backend.application.services.call_meter import segment_usage
+from backend.application.services.farewell import call_is_over
 from backend.application.use_cases.end_call import EndCall
 from backend.application.use_cases.handle_call_turn import HandleCallTurn, TurnRequest
 from backend.domain.entities.call import Call
@@ -23,6 +24,8 @@ from backend.domain.services.cost_calculator import CostCalculator
 from backend.domain.value_objects.audio import AudioChunk
 
 log = logging.getLogger(__name__)
+HANG_UP_GRACE_S = 0.5
+"""After the goodbye finishes playing, so the last syllable isn't clipped by the hang-up."""
 
 
 @dataclass(frozen=True)
@@ -75,6 +78,7 @@ class CallSession:
         self._gap_ms = 0.0
         self._carry_text = ""
         self._agent_silent_at: float | None = None
+        self._hang_up_at: float | None = None
         self._turn_error: BaseException | None = None
 
     @property
@@ -101,6 +105,8 @@ class CallSession:
                 await self._on_audio(chunk)
                 if self._turn_error is not None:
                     raise self._turn_error
+                if self._hang_up_at is not None and self._clock.monotonic() >= self._hang_up_at:
+                    break
             await self._finish_turn()
             if self._turn_error is not None:
                 raise self._turn_error
@@ -134,6 +140,12 @@ class CallSession:
             if self._barge_in_detected(speech, chunk.duration_seconds * 1000):
                 await self._barge_in()
             return
+        if self._hang_up_at is not None:
+            # The goodbye is still playing out of the speaker's buffer; the agent isn't busy,
+            # so this isn't barge-in, but a caller who starts talking wasn't finished.
+            if self._barge_in_detected(speech, chunk.duration_seconds * 1000):
+                self._hang_up_at = None
+            return
         self._speech_run_ms = self._gap_ms = 0.0
         if self._endpointer.should_commit(now):
             timeline = TurnTimeline(speech_end=self._listening_since(), endpoint=now)
@@ -161,7 +173,12 @@ class CallSession:
                 self._speech_run_ms = 0.0
         return self._speech_run_ms >= self._config.barge_in_min_speech_ms
 
+    @property
+    def agent_hung_up(self) -> bool:
+        return self._hang_up_at is not None and self._clock.monotonic() >= self._hang_up_at
+
     async def _barge_in(self) -> None:
+        self._hang_up_at = None  # talking over the goodbye means they weren't done
         if self._turn_request is not None:
             self._turn_request.interrupt.set()
         await self._output.clear()
@@ -212,6 +229,10 @@ class CallSession:
         if turn.agent_text:
             self._ctx.history.append(ChatMessage("assistant", turn.agent_text))
             self._endpointer.observe_agent_turn(turn.agent_text)
+        if outcome.audio_started and call_is_over(turn.user_text, turn.agent_text):
+            self._hang_up_at = (
+                self._clock.monotonic() + self._output.queued_seconds() + HANG_UP_GRACE_S
+            )
 
     async def _flush_transcript(self) -> str:
         future: asyncio.Future[str] = asyncio.get_running_loop().create_future()

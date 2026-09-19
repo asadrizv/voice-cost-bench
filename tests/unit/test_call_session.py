@@ -288,3 +288,47 @@ async def test_prewarm_failure_does_not_affect_the_call() -> None:
     caller.session = session
     call = await session.run(caller.frames())
     assert call.status.value == "completed" and len(call.turns) == 2
+
+
+async def test_agent_hangs_up_after_goodbyes_unless_the_caller_talks_over_it() -> None:
+    world = make_world(
+        replies=["You're welcome. Goodbye!", "Of course, what else?"],
+        utterances=["That's all, thanks. Bye!", "Wait, one more thing."],
+    )
+    session, out, _ = await make_session(world)
+
+    async def tick(chunk: AudioChunk) -> AudioChunk:
+        world.clock.advance(FRAME_S)
+        await asyncio.sleep(0)
+        return chunk
+
+    async def frames(interrupt: bool) -> AsyncIterator[AudioChunk]:
+        while not out.chunks:  # greeting
+            yield await tick(silence())
+        while session.agent_busy:
+            yield await tick(silence())
+        for _ in range(30):  # "that's all, bye"
+            yield await tick(speech())
+        while len(session.call.turns) < 2 or session.agent_busy:
+            yield await tick(silence())
+        out.queued = 1.0  # the goodbye's last second is still in the speaker buffer
+        if interrupt:
+            for _ in range(20):  # "wait, one more thing" over the tail of the goodbye
+                yield await tick(speech())
+        for _ in range(200):  # 4 s: well past when the line would have been dropped
+            out.queued = 0.0
+            yield await tick(silence())
+        while session.agent_busy:
+            yield await tick(silence())
+
+    call = await session.run(frames(interrupt=True))
+    assert not session.agent_hung_up
+    assert call.turns[-1].user_text == "Wait, one more thing."
+
+    world2 = make_world(
+        replies=["You're welcome. Goodbye!"], utterances=["That's all, thanks. Bye!"]
+    )
+    session, out, _ = await make_session(world2)
+    world = world2
+    call = await session.run(frames(interrupt=False))
+    assert session.agent_hung_up and len(call.turns) == 2
