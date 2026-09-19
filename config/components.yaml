@@ -29,6 +29,28 @@ components:
     assumption: >-
       Priced in rates.yaml but not connected yet: calls arrive over WebRTC through
       LiveKit. US region is Twilio's default without an EU edge contract.
+  telnyx:
+    kind: telephony
+    vendor: Telnyx
+    model: Elastic SIP Trunking
+    version: vendor-managed
+    region: global (nearest point of presence)
+    licence: proprietary
+    leaves_eu: true
+    assumption: >-
+      Priced in rates.yaml but not connected. Telnyx is US-based; no EU-only routing
+      contract is configured, so calls may leave the EU.
+  sipgate:
+    kind: telephony
+    vendor: sipgate
+    model: sipgate trunking
+    version: vendor-managed
+    region: de
+    licence: proprietary
+    leaves_eu: false
+    assumption: >-
+      Listed in rates.yaml but not connected. sipgate is a German carrier; that it keeps
+      calls in Germany is its published positioning, not checked against a contract.
 
   deepgram:
     kind: stt

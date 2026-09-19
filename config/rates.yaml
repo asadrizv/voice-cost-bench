@@ -13,4 +13,33 @@ selfhosted:
     - { provider: ovhcloud, sku: L40S, region: gra, hourly_usd: 1.69 }
     - { provider: nebius,   sku: L40S, region: fi,  hourly_usd: 1.55 }
 telephony:
-  { provider: twilio, unit: minute, price_usd: 0.014 }
+  selected: twilio                  # its price_usd is both pipelines' telephony rate
+  carriers:                         # verified: false = fetched, not yet checked by a human
+    twilio:
+      unit: minute
+      price_usd: 0.014
+      source: https://www.twilio.com/en-us/voice/pricing/us
+      checked_on: "2026-09-17"
+      verified: true
+      note: >-
+        US outbound ("make calls"). Germany inbound to a local number is $0.0100/min
+        plus $1.35/month per number (twilio.com/en-us/voice/pricing/de, fetched 2026-09-19).
+    telnyx:
+      unit: minute
+      price_usd: 0.0032
+      source: https://telnyx.com/pricing/elastic-sip/de
+      checked_on: "2026-09-19"
+      verified: false
+      note: >-
+        Inbound to a local number, "starting at" figure. The page rendered US rates; no
+        Germany-specific rate was found. Excludes inbound channels ($12/month each for the
+        first 10) and the number ($1/month for a German local number).
+    sipgate:
+      unit: minute
+      source: https://www.sipgatetrunking.de/preise
+      checked_on: "2026-09-19"
+      verified: false
+      note: >-
+        No per-minute price for inbound calls: they are covered by a monthly channel plan
+        (sipgate trunking 2, two inbound channels, EUR 9.95/month excl. VAT), so it has no
+        cost row. Outbound starts at EUR 0.005/min to German landlines.

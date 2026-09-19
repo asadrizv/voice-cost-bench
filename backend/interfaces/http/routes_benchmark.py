@@ -32,7 +32,7 @@ async def config(
     c: Annotated[Container, Depends(container)], s: Annotated[Settings, Depends(settings)]
 ) -> dict[str, Any]:
     from backend.domain.value_objects.pipeline_kind import PipelineKind
-    from backend.interfaces.http.serializers import rates
+    from backend.interfaces.http.serializers import rates, telephony_quote
 
     card = c.calculator.rate_card
     return {
@@ -50,6 +50,7 @@ async def config(
             }
             for q in c.rates.client_gpu_quotes()
         ],
+        "telephony_quotes": [telephony_quote(q) for q in c.rates.telephony_quotes()],
         "api_spend_usd": await c.repository.total_spend_usd(PipelineKind.API),
         "api_spend_limit_usd": s.dev_spend_limit_usd,
         "selfhosted_ceiling": s.selfhosted_max_concurrency,

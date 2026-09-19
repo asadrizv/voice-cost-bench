@@ -498,3 +498,51 @@ def test_a_configured_component_without_a_complete_catalogue_entry_fails_startup
         validate_static_config(settings)
     with pytest.raises(ComponentCatalogueError, match=named):
         create_app(settings, pipelines=StaticPipelines({}))
+
+
+def select_carrier(config: Path, carrier: str) -> None:
+    rates = config / "rates.yaml"
+    rates.write_text(rates.read_text().replace("selected: twilio", f"selected: {carrier}", 1))
+
+
+async def test_config_lists_every_carrier_and_the_selected_one_prices_telephony(
+    tmp_path: Path,
+) -> None:
+    config = config_copy(tmp_path)
+    select_carrier(config, "telnyx")
+    app = create_app(
+        SETTINGS.model_copy(update={"config_dir": config}), pipelines=StaticPipelines({})
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        body = (await client.get("/config")).json()
+        transparency = (await client.get("/transparency")).json()
+
+    carriers = {q["carrier"]: q for q in body["telephony_quotes"]}
+    assert set(carriers) == {"twilio", "telnyx", "sipgate"}
+    assert [c for c, q in carriers.items() if q["selected"]] == ["telnyx"]
+    assert carriers["telnyx"]["per_minute_usd"] == 0.0032
+    assert carriers["telnyx"]["verified"] is False
+    assert carriers["telnyx"]["source_url"].startswith("https://telnyx.com/")
+    assert (carriers["twilio"]["verified"], carriers["twilio"]["checked_on"]) == (
+        True,
+        "2026-09-17",
+    )
+    assert carriers["sipgate"]["per_minute_usd"] is None and carriers["sipgate"]["note"]
+    assert body["rates"]["api"]["telephony_per_minute"] == 0.0032
+    assert body["rates"]["selfhosted"]["telephony_per_minute"] == 0.0032
+    assert body["rates"]["selfhosted"]["gpu_per_hour"] == 1.09
+    for components in transparency["pipelines"].values():
+        telephony = next(c for c in components if c["kind"] == "telephony")
+        assert telephony["id"] == "telnyx"
+
+
+def test_a_selected_carrier_without_a_catalogue_entry_fails_startup(tmp_path: Path) -> None:
+    config = config_copy(tmp_path)
+    select_carrier(config, "telnyx")
+    catalogue = config / "components.yaml"
+    catalogue.write_text(catalogue.read_text().replace("  telnyx:\n", "  telnyx-old:\n", 1))
+    settings = SETTINGS.model_copy(update={"config_dir": config})
+
+    with pytest.raises(ComponentCatalogueError, match="'telnyx'"):
+        create_app(settings, pipelines=StaticPipelines({}))
