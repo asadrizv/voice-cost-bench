@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
+import re
 from collections.abc import AsyncIterator
+from datetime import datetime
+from decimal import Decimal
+from enum import Enum
 
 import pytest
 
@@ -12,6 +17,7 @@ from backend.application.use_cases.call_session import CallSession, SessionConfi
 from backend.domain.entities.call import CallStatus
 from backend.domain.value_objects.audio import AudioChunk
 from backend.domain.value_objects.pipeline_kind import PipelineKind
+from backend.infrastructure.telemetry.event_codec import encode
 from tests.fakes import ByteVad, FakeLlm, FakeTts, RecordingOutput, silence, speech
 from tests.unit.conftest import World, make_world
 
@@ -100,6 +106,77 @@ async def test_full_conversation_runs_and_is_accounted() -> None:
     kinds = {e.kind for e in world.metrics.events}  # type: ignore[attr-defined]
     assert {"started", "turn", "ended"} <= kinds
     assert out.chunks
+
+
+_SCALARS = (str, int, float, bool, Decimal, datetime, Enum, type(None))
+# Raw PCM smuggled through latin-1 shows up as control characters; base64 or hex of PCM
+# as a long unbroken run. Transcripts always contain spaces, ids and amounts are short.
+_ENCODED_AUDIO = re.compile(r"[\x00-\x08\x0e-\x1f]|[A-Za-z0-9+/=]{64,}")
+
+
+def audio_like_values(value: object, path: str = "") -> list[str]:
+    """Paths of every value that is, or could be, audio. Fails closed: a type it doesn't
+    recognise is reported, so a numpy array or a new wrapper can't slip past."""
+    if isinstance(value, str):
+        return [path] if _ENCODED_AUDIO.search(value) else []
+    if isinstance(value, _SCALARS):
+        return []
+    if dataclasses.is_dataclass(value) and not isinstance(value, type | AudioChunk):
+        return [
+            p
+            for f in dataclasses.fields(value)
+            for p in audio_like_values(getattr(value, f.name), f"{path}.{f.name}")
+        ]
+    if isinstance(value, dict):
+        return [
+            p
+            for k, v in value.items()
+            for p in audio_like_values(k, f"{path}[key]") + audio_like_values(v, f"{path}[{k}]")
+        ]
+    if isinstance(value, list | tuple | set | frozenset):
+        return [p for i, v in enumerate(value) for p in audio_like_values(v, f"{path}[{i}]")]
+    return [f"{path} ({type(value).__name__})"]
+
+
+@pytest.mark.parametrize("kind", list(PipelineKind))
+async def test_a_full_call_leaves_no_audio_in_storage_or_live_events(kind: PipelineKind) -> None:
+    world = make_world(
+        replies=["May I have your name?", "Thank you, Ms. Weber."],
+        utterances=["I need a lawyer for my lease.", "Anna Weber."],
+    )
+    session, out, _ = await make_session(world, kind)
+    caller = Caller(world, [1000, 800])
+    caller.session = session
+    await session.run(caller.frames())
+    assert out.chunks and world.stt.audio_seconds > 0  # audio did flow through the call
+
+    stored = await world.repo.list()
+    events = world.metrics.events
+    wire = [encode(e) for e in events]  # type: ignore[arg-type]
+
+    assert len(stored) == 1 and len(stored[0].turns) == 3
+    assert {"started", "turn", "ended"} <= {e["kind"] for e in wire}
+    assert audio_like_values(stored, "stored") == []
+    assert audio_like_values(events, "events") == []
+    assert audio_like_values(wire, "wire") == []
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        b"\x01\x00",
+        bytearray(b"\x01\x00"),
+        memoryview(b"\x01\x00"),
+        AudioChunk(b"\x01\x00"),
+        "\x01\x00\x01\x00",
+        "AQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEA",
+        {"extra": [AudioChunk(b"")]},
+        object(),
+    ],
+    ids=lambda v: type(v).__name__,
+)
+def test_audio_detector_flags_every_shape_audio_can_take(value: object) -> None:
+    assert audio_like_values(value) != []
 
 
 async def test_empty_transcript_commits_no_turn() -> None:
