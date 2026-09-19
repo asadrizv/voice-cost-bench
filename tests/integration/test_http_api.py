@@ -2,22 +2,28 @@ from __future__ import annotations
 
 import json
 import shutil
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
 import httpx
 import jwt
 import numpy as np
 import pytest
+from fastapi import FastAPI
 
+from backend.application.ports.component_catalogue import ComponentKind
 from backend.application.ports.pipeline_provider import Pipeline
 from backend.application.use_cases.handle_call_turn import TurnRequest
 from backend.domain.entities.latency import TurnTimeline
 from backend.domain.value_objects.pipeline_kind import PipelineKind
 from backend.infrastructure.config.component_catalogue import ComponentCatalogueError
 from backend.infrastructure.config.settings import Settings
+from backend.infrastructure.pipeline_factory import SELFHOSTED_ENGINES
 from backend.interfaces.container import validate_static_config
 from backend.interfaces.http.app import create_app
+from gpu.kokoro_service.app import SYNTHESIZERS, KokoroSynthesizer
+from gpu.kokoro_service.app import create_app as kokoro_app
+from gpu.whisper_service.app import TRANSCRIBERS, FasterWhisperTranscriber
 from gpu.whisper_service.app import create_app as whisper_app
 from tests.fakes import FakeClock, FakeLlm, FakeTts, RecordingOutput, ScriptedStt, StaticPipelines
 from tests.integration.servers import run_asgi
@@ -313,6 +319,122 @@ async def test_transparency_names_the_stt_engine_the_whisper_service_runs() -> N
     assert (stt["id"], stt["vendor"]) == ("mlx", "MLX Whisper (OpenAI Whisper weights)")
     assert stt["model"] == "mlx-community/whisper-large-v3-turbo"
     assert (stt["confirmed"], stt["unconfirmed_reason"]) == (True, "")
+
+
+async def test_a_service_running_an_engine_without_a_catalogue_entry_is_unconfirmed() -> None:
+    transcriber = IdentifiedTranscriber("voxtral", "mistralai/Voxtral-Mini-3B")
+    async with run_asgi(whisper_app(lambda: transcriber, workers=1)) as host:
+        stacks = await transparency_of(
+            SETTINGS.model_copy(update={"whisper_ws_url": f"ws://{host}/v1/stream"})
+        )
+
+    stt = stacks["selfhosted"]["stt"]
+    assert (stt["id"], stt["model"]) == ("faster-whisper", "large-v3-turbo")
+    assert stt["confirmed"] is False
+    assert stt["unconfirmed_reason"] == (
+        "the stt service runs 'voxtral', which has no catalogue entry; "
+        "listed from the catalogue's default"
+    )
+
+
+class KokoroStub:
+    engine, model = KokoroSynthesizer.engine, KokoroSynthesizer.model
+
+    def synthesize(self, text: str, voice: str, speed: float) -> Iterator[np.ndarray]:
+        yield np.zeros(240, np.float32)
+
+
+async def test_transparency_confirms_the_tts_engine_the_kokoro_service_runs() -> None:
+    async with run_asgi(kokoro_app(KokoroStub, workers=1)) as host:
+        stacks = await transparency_of(SETTINGS.model_copy(update={"kokoro_url": f"http://{host}"}))
+
+    tts = stacks["selfhosted"]["tts"]
+    assert (tts["id"], tts["vendor"]) == ("kokoro", "hexgrad Kokoro")
+    assert tts["model"] == "hexgrad/Kokoro-82M"
+    assert (tts["confirmed"], tts["unconfirmed_reason"]) == (True, "")
+
+
+@pytest.mark.parametrize(
+    ("engines", "named"),
+    [
+        ([{"id": "kokoro", "model": "k"}, {"id": "orpheus", "model": "o"}], "'kokoro', 'orpheus'"),
+        ([], "none"),
+    ],
+)
+async def test_a_service_not_reporting_exactly_one_engine_leaves_its_default_unconfirmed(
+    engines: list[dict[str, str]], named: str
+) -> None:
+    info = FastAPI()
+
+    @info.get("/v1/info")
+    async def report() -> dict[str, list[dict[str, str]]]:
+        return {"engines": engines}
+
+    async with run_asgi(info) as host:
+        stacks = await transparency_of(SETTINGS.model_copy(update={"kokoro_url": f"http://{host}"}))
+
+    tts = stacks["selfhosted"]["tts"]
+    assert (tts["id"], tts["model"], tts["confirmed"]) == ("kokoro", "Kokoro-82M", False)
+    assert tts["unconfirmed_reason"] == (
+        f"the tts service reports engines {named}, and this lists one per kind; "
+        "listed from the catalogue's default"
+    )
+
+
+def test_startup_checks_the_catalogue_for_every_engine_the_services_can_run() -> None:
+    assert [t.engine for t in TRANSCRIBERS] == list(SELFHOSTED_ENGINES[ComponentKind.STT])
+    assert [s.engine for s in SYNTHESIZERS] == list(SELFHOSTED_ENGINES[ComponentKind.TTS])
+    assert SELFHOSTED_ENGINES[ComponentKind.STT][0] == FasterWhisperTranscriber.engine
+
+
+async def test_simulated_calls_leave_the_services_unasked() -> None:
+    transcriber = IdentifiedTranscriber("mlx", "mlx-community/whisper-large-v3-turbo")
+    async with run_asgi(whisper_app(lambda: transcriber, workers=1)) as host:
+        stacks = await transparency_of(
+            SETTINGS.model_copy(
+                update={"whisper_ws_url": f"ws://{host}/v1/stream", "simulate_providers": True}
+            )
+        )
+
+    stt = stacks["selfhosted"]["stt"]
+    assert (stt["id"], stt["confirmed"]) == ("faster-whisper", False)
+    assert stt["unconfirmed_reason"] == "calls are simulated; the stt service was not asked"
+
+
+async def test_a_service_report_is_reused_for_a_minute() -> None:
+    transcriber = IdentifiedTranscriber("mlx", "mlx-community/whisper-large-v3-turbo")
+    async with run_asgi(whisper_app(lambda: transcriber, workers=1)) as host:
+        settings = SETTINGS.model_copy(update={"whisper_ws_url": f"ws://{host}/v1/stream"})
+        app = create_app(settings, pipelines=StaticPipelines({}))
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            first = (await client.get("/transparency")).json()
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        after_the_service_stopped = (await client.get("/transparency")).json()
+
+    for body in (first, after_the_service_stopped):
+        stt = next(c for c in body["pipelines"]["selfhosted"] if c["kind"] == "stt")
+        assert (stt["id"], stt["confirmed"]) == ("mlx", True)
+
+
+async def test_an_unreachable_service_leaves_its_default_listed_but_unconfirmed() -> None:
+    app = create_app(SETTINGS, pipelines=StaticPipelines({}))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/transparency")
+
+    assert response.status_code == 200
+    pipelines = response.json()["pipelines"]
+    selfhosted = {c["kind"]: c for c in pipelines["selfhosted"]}
+    assert (selfhosted["stt"]["id"], selfhosted["tts"]["id"]) == ("faster-whisper", "kokoro")
+    for kind in ("stt", "tts"):
+        assert selfhosted[kind]["confirmed"] is False
+        assert selfhosted[kind]["unconfirmed_reason"] == (
+            f"the {kind} service did not report what it runs (ConnectError); "
+            "listed from the catalogue's default"
+        )
+    assert selfhosted["llm"]["confirmed"] and selfhosted["llm"]["unconfirmed_reason"] == ""
+    assert all(c["confirmed"] for c in pipelines["api"])
 
 
 @pytest.mark.parametrize(
