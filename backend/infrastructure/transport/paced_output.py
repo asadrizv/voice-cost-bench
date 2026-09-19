@@ -34,5 +34,8 @@ class PacedAudioOutput:
     def drained(self) -> bool:
         return self._clock.monotonic() >= self._until
 
+    def queued_seconds(self) -> float:
+        return self.remaining_seconds()
+
     def remaining_seconds(self) -> float:
         return max(0.0, self._until - self._clock.monotonic())

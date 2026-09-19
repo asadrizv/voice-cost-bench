@@ -150,3 +150,11 @@ async def test_whisper_service_drops_leading_silence_and_passes_language() -> No
     pcm, fmt = read_wav(AUDIO)
     assert final_seconds <= fmt.duration_seconds(len(pcm)) + 0.05
     assert language == "de"
+
+
+def test_whisper_drops_low_confidence_segments() -> None:
+    from gpu.whisper_service.app import confident_text
+
+    assert confident_text([(" what", -2.76), (" you", -2.76)]) == ""
+    assert confident_text([(" My name is Anna Weber.", -0.26)]) == "My name is Anna Weber."
+    assert confident_text([(" Thank you.", -0.44), (" um", -1.8)]) == "Thank you."

@@ -213,3 +213,39 @@ async def test_flush_timeout_falls_back_to_collected_text() -> None:
     caller.session = session
     call = await session.run(caller.frames())
     assert call.turns[-1].user_text == "partial words"
+
+
+async def test_speech_during_the_agents_reply_is_not_billed_as_response_delay() -> None:
+    """The caller talks (below barge-in) while the agent is still speaking; the agent then
+    finishes and answers. The wait starts when the agent went quiet, not when they spoke."""
+    world = make_world(utterances=["Thank you."])
+    block = asyncio.Event()
+    session, out, ctx = await make_session(
+        world, config=SessionConfig(tick_interval_s=0.001, barge_in_min_speech_ms=10_000)
+    )
+    swap_pipeline(ctx, tts=FakeTts(world.clock, block=block))
+
+    async def frames() -> AsyncIterator[AudioChunk]:
+        async def tick(chunk: AudioChunk) -> AudioChunk:
+            world.clock.advance(FRAME_S)
+            await asyncio.sleep(0)
+            return chunk
+
+        while not out.chunks:
+            yield await tick(silence())
+        for _ in range(30):  # "thank you" over the greeting
+            yield await tick(speech())
+        for _ in range(200):  # the greeting keeps playing for 4 s
+            yield await tick(silence())
+        out.queued = 0.5  # half a second still buffered when the turn task ends
+        block.set()
+        for _ in range(100):
+            yield await tick(silence())
+        while session.agent_busy:
+            yield await tick(silence())
+
+    call = await session.run(frames())
+    reply = call.turns[-1]
+    assert reply.user_text == "Thank you."
+    assert reply.latency is not None
+    assert reply.latency.perceived_delay < 1500  # not the ~4.7 s since the caller spoke

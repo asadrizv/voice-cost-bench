@@ -121,6 +121,7 @@ class ScriptedStt:
 class RecordingOutput:
     chunks: list[AudioChunk] = field(default_factory=list)
     clears: int = 0
+    queued: float = 0.0
 
     async def write(self, chunk: AudioChunk) -> None:
         self.chunks.append(chunk)
@@ -128,6 +129,9 @@ class RecordingOutput:
 
     async def clear(self) -> None:
         self.clears += 1
+
+    def queued_seconds(self) -> float:
+        return self.queued
 
 
 class ByteVad:

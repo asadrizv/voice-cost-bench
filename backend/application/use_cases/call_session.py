@@ -71,6 +71,7 @@ class CallSession:
         self._speech_run_ms = 0.0
         self._gap_ms = 0.0
         self._carry_text = ""
+        self._agent_silent_at: float | None = None
         self._turn_error: BaseException | None = None
 
     @property
@@ -130,9 +131,18 @@ class CallSession:
             return
         self._speech_run_ms = self._gap_ms = 0.0
         if self._endpointer.should_commit(now):
-            timeline = TurnTimeline(speech_end=self._endpointer.speech_end, endpoint=now)
+            timeline = TurnTimeline(speech_end=self._listening_since(), endpoint=now)
             self._endpointer.reset()
             self._start_turn(TurnRequest(user_text="", output=self._output, timeline=timeline))
+
+    def _listening_since(self) -> float | None:
+        """When the caller's wait began: the end of their speech, or the moment the agent
+        fell silent if they spoke over it. Without this, words said during the agent's
+        reply would bill the agent's own talking time as response delay."""
+        speech_end = self._endpointer.speech_end
+        if speech_end is None or self._agent_silent_at is None:
+            return speech_end
+        return max(speech_end, self._agent_silent_at)
 
     def _barge_in_detected(self, speech: bool, frame_ms: float) -> bool:
         """Speech accumulates across short gaps between words and resets after a real pause,
@@ -165,6 +175,12 @@ class CallSession:
             await self._turn_task
 
     async def _run_turn(self, request: TurnRequest, transcribe: bool) -> None:
+        try:
+            await self._respond(request, transcribe)
+        finally:
+            self._agent_silent_at = self._clock.monotonic() + self._output.queued_seconds()
+
+    async def _respond(self, request: TurnRequest, transcribe: bool) -> None:
         try:
             if transcribe:
                 text = await self._flush_transcript()

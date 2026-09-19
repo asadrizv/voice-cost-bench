@@ -39,6 +39,9 @@ class LiveKitAudioOutput:
     async def clear(self) -> None:
         self._source.clear_queue()
 
+    def queued_seconds(self) -> float:
+        return float(self._source.queued_duration)
+
 
 async def caller_audio(track: rtc.Track) -> AsyncIterator[AudioChunk]:
     """The caller's microphone as 20 ms, 16 kHz mono chunks; ends when the track does."""

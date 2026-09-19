@@ -36,6 +36,16 @@ MAX_UTTERANCE_S = 30.0  # Whisper's window; older audio is dropped, not silently
 VOICED_DBFS = -45.0
 
 
+MIN_AVG_LOGPROB = -1.0
+"""Segments below this are dropped. Measured on large-v3-turbo: real speech scores about
+-0.3, while the "what you" it invents from a breath scores about -2.8. Its no-speech
+probability reads 0.0 for pure hiss, so it can't be used as the filter."""
+
+
+def confident_text(segments: list[tuple[str, float]]) -> str:
+    return " ".join(t.strip() for t, logprob in segments if logprob >= MIN_AVG_LOGPROB).strip()
+
+
 class Transcriber(Protocol):
     def transcribe(self, audio: np.ndarray, language: str) -> str: ...
 
@@ -59,7 +69,7 @@ class FasterWhisperTranscriber:
             without_timestamps=True,
             vad_filter=False,
         )
-        return " ".join(s.text.strip() for s in segments).strip()
+        return confident_text([(s.text, s.avg_logprob) for s in segments])
 
 
 class MlxWhisperTranscriber:
@@ -80,7 +90,7 @@ class MlxWhisperTranscriber:
             condition_on_previous_text=False,
             without_timestamps=True,
         )
-        return str(result.get("text", "")).strip()
+        return confident_text([(s["text"], s["avg_logprob"]) for s in result["segments"]])
 
 
 def default_transcriber() -> Transcriber:

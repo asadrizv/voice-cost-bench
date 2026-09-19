@@ -13,3 +13,7 @@ class AudioOutput(Protocol):
     async def clear(self) -> None:
         """Drops queued audio immediately; used for barge-in."""
         ...
+
+    def queued_seconds(self) -> float:
+        """Audio written but not yet played."""
+        ...
