@@ -110,6 +110,19 @@ Clean architecture: `domain` (pure) ← `application` (ports, use cases) ← `in
 - **Prices** live only in `config/rates.yaml`. Sampling parameters and the no-thinking
   switch live in the persona. vLLM flags live in `config/serving/<model>-<gpu>.yaml`.
 
+## No call audio is stored
+
+Caller and agent audio exist only in memory for the length of a call. The database keeps
+transcripts, timings and costs, and live events carry the same. No audio goes to disk,
+the database or the event stream. In Germany, recording someone's spoken words without
+consent is a criminal offence (§201 StGB). Transcribing live without keeping the audio is
+the position a law firm can defend.
+
+Two tests keep this true: a full call through `CallSession` must leave no audio in the
+repository or in emitted events, and the schema test fails if any table gains a binary
+column. On the `api` pipeline, audio is streamed to Deepgram and ElevenLabs, so their
+retention terms also apply.
+
 ## Tests
 
 ```bash
