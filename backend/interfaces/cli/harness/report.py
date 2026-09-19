@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import asdict
 from decimal import Decimal
 from typing import Any
 
+from backend.application.ports.rate_card_provider import TelephonyQuote
 from backend.domain.entities.cost import CostBreakdown
 from backend.domain.entities.latency import LatencyStage
 from backend.domain.services.cost_calculator import RateCard
@@ -36,12 +38,15 @@ def _normalise(text: str) -> str:
 
 
 def summarise_level(
-    run: LevelRun, conversation: Conversation, simulated: bool = False
+    run: LevelRun,
+    conversation: Conversation,
+    simulated: bool = False,
+    carriers: Sequence[TelephonyQuote] = (),
 ) -> dict[str, Any]:
     calls = run.calls
     cost = CostBreakdown.zero()
     seconds = 0.0
-    gpu_seconds = share_seconds = 0.0
+    gpu_seconds = share_seconds = telephony_seconds = 0.0
     wers: list[float] = []
     for call in calls:
         cost = cost + call.cost
@@ -50,6 +55,7 @@ def summarise_level(
         for u in segments:
             gpu_seconds += u.gpu_seconds
             share_seconds += u.gpu_seconds / max(u.concurrent_calls, 1)
+            telephony_seconds += u.telephony_seconds
         # Whole-call WER: a turn can split at a mid-utterance pause and be merged back by
         # carry-over, so pairing script lines with turns one-to-one would misalign.
         heard = " ".join(t.user_text for t in call.turns if t.user_text and not t.interrupted)
@@ -61,6 +67,9 @@ def summarise_level(
     minutes = seconds / 60
     lateness_p95 = percentile(run.lateness_ms, 95) if run.lateness_ms else 0.0
     per_minute = {k: (v * 60 / seconds if seconds else 0.0) for k, v in cost.as_dict().items()}
+    # Telephony cost is linear in telephony seconds, so each carrier swaps only that line.
+    without_telephony = per_minute["total"] - per_minute["telephony"]
+    telephony_share = telephony_seconds / seconds if seconds else 0.0
     return {
         "concurrency": run.concurrency,
         "duration_s": run.duration_s,
@@ -74,6 +83,11 @@ def summarise_level(
         "cost_usd": cost.as_dict(),
         "cost_per_minute_usd": per_minute["total"],
         "cost_per_minute_by_stage_usd": per_minute,
+        "cost_per_minute_by_carrier_usd": {
+            q.carrier: without_telephony + float(q.per_minute_usd) * telephony_share
+            for q in carriers
+            if q.per_minute_usd is not None
+        },
         "effective_concurrency": gpu_seconds / share_seconds if share_seconds else 1.0,
         "latency_ms": {
             stage.value: {k: round(v, 1) for k, v in asdict(stats[stage]).items()}

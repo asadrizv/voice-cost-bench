@@ -4,11 +4,13 @@ on real fixture audio, real-time pacing. Short conversation to keep it under ~15
 from __future__ import annotations
 
 from dataclasses import replace
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
 from backend.application.ports.component_catalogue import Component, ComponentKind
+from backend.application.ports.rate_card_provider import TelephonyQuote
 from backend.application.services.concurrency_supervisor import ConcurrencySupervisor
 from backend.application.services.endpointing import EndpointerKind
 from backend.application.use_cases.describe_components import DescribedComponent
@@ -70,6 +72,39 @@ async def test_level_run_produces_costed_timed_calls() -> None:
     by_u = {row["utilisation"]: row for row in curve}
     assert by_u[0.25]["gpu_share_usd"] == 4 * by_u[1.0]["gpu_share_usd"]
     assert by_u[1.0]["cost_per_minute_usd_scaleway"] > by_u[1.0]["cost_per_minute_usd"]
+
+
+@needs_audio
+async def test_each_priced_carrier_gets_a_cost_row_differing_only_in_telephony() -> None:
+    conversation = load_conversation(FIXTURES, "intake_en")
+    conversation = replace(
+        conversation, turns=conversation.turns[1:2], audio=conversation.audio[1:2]
+    )
+    container = build_container(
+        Settings(database_url=""),
+        NullMetrics(),  # type: ignore[arg-type]
+        repository=InMemoryCallRepository(),
+        supervisors={PipelineKind.SELFHOSTED: ConcurrencySupervisor(ceiling=2)},
+    )
+    gpu = SimulatedGpu(SimulatedGpuProfile(speech_s_per_char=0.01))
+    runner = LevelRunner(
+        container, PipelineKind.SELFHOSTED, conversation, EndpointerKind.SEMANTIC, gpu
+    )
+    double = TelephonyQuote("double", Decimal("0.028"), "https://x", "2026-09-19", False, False)
+    carriers = [*container.rates.telephony_quotes(), double]
+
+    run = await runner.run(concurrency=2, duration_s=1)
+    summary = report.summarise_level(run, conversation, True, carriers)
+
+    rows = summary["cost_per_minute_by_carrier_usd"]
+    assert set(rows) == {"twilio", "telnyx", "double"}  # sipgate publishes no per-minute price
+    telephony = summary["cost_per_minute_by_stage_usd"]["telephony"]
+    assert telephony > 0
+    assert rows["twilio"] == pytest.approx(summary["cost_per_minute_usd"])
+    assert rows["double"] == pytest.approx(summary["cost_per_minute_usd"] + telephony)
+    assert rows["telnyx"] == pytest.approx(
+        summary["cost_per_minute_usd"] - telephony * (1 - 0.0032 / 0.014)
+    )
 
 
 def test_breaking_point_is_first_level_over_budget() -> None:

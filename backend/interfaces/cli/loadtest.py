@@ -33,6 +33,7 @@ from backend.interfaces.cli.harness import provenance, report
 from backend.interfaces.cli.harness.caller import load_conversation
 from backend.interfaces.cli.harness.runner import LevelRunner
 from backend.interfaces.container import Container, build_container
+from backend.interfaces.http.serializers import telephony_quote
 
 log = logging.getLogger("loadtest")
 RESULTS = REPO_ROOT / "results"
@@ -76,12 +77,13 @@ async def _sweep(args: argparse.Namespace) -> dict[str, Any]:
     gpu = SimulatedGpu() if simulated else None
     runner = LevelRunner(container, kind, conversation, args.endpointer, simulated=gpu)
 
+    carriers = container.rates.telephony_quotes()
     results: list[dict[str, Any]] = []
     try:
         for level in levels:
             log.info("level %d: %ds of %d concurrent calls", level, args.duration, level)
             run = await runner.run(level, args.duration)
-            summary = report.summarise_level(run, conversation, simulated)
+            summary = report.summarise_level(run, conversation, simulated, carriers)
             results.append(summary)
             log.info(
                 "  %d calls, $%.4f/min, e2e p95 %.0f ms, perceived p95 %.0f ms%s",
@@ -127,6 +129,7 @@ async def _sweep(args: argparse.Namespace) -> dict[str, Any]:
         if kind is PipelineKind.SELFHOSTED
         else [],
         "client_gpu_quotes": quotes,
+        "telephony_quotes": [telephony_quote(q) for q in carriers],
     }
 
 
