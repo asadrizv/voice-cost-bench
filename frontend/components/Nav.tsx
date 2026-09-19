@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { API_URL } from "@/lib/api";
 
 const LINKS = [
   { href: "/", label: "Call" },
@@ -21,6 +22,12 @@ export function Nav() {
           </Link>
         );
       })}
+      <a
+        href={`${API_URL}/transparency`}
+        title="Every component that touches a call: vendor, model, region, licence"
+      >
+        Transparency
+      </a>
     </nav>
   );
 }
