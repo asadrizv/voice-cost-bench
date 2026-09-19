@@ -4,6 +4,7 @@ from backend.application.ports.stt_port import TranscriptEvent
 from backend.application.services.endpointing import (
     SemanticEndpointDetector,
     SilenceEndpointDetector,
+    expects_dictation,
     heuristic_completeness,
 )
 
@@ -100,3 +101,47 @@ def test_semantic_transcript_joins_finals_and_interim() -> None:
     assert d.transcript == "Hello. I need help."
     d.reset()
     assert d.transcript == "" and d.speech_end is None
+
+
+@pytest.mark.parametrize(
+    ("agent", "dictation"),
+    [
+        ("Thank you. Could you please tell me your full name?", True),
+        ("Perfect. What's the best email for the confirmation?", True),
+        ("And a phone number we can reach you on?", True),
+        ("Wie ist Ihre Telefonnummer?", True),
+        ("Darf ich Ihren Namen erfahren?", True),
+        ("Thank you, Aaron. Is this regarding employment, tenancy or family law?", False),
+        ("Thanks for your email. Is there a deadline coming up?", False),
+        ("Goodbye, Aaron.", False),
+        ("", False),
+    ],
+)
+def test_expects_dictation_reads_only_the_last_question(agent: str, dictation: bool) -> None:
+    assert expects_dictation(agent) is dictation
+
+
+def test_semantic_waits_longer_after_a_request_for_an_email() -> None:
+    """The cut-off from a real call: "Yeah, my email is asad." committed after 250 ms while
+    the caller was mid-address."""
+    d = SemanticEndpointDetector(min_silence_ms=250, default_silence_ms=600, max_silence_ms=1500)
+    d.observe_agent_turn("Perfect. What's the best email for the confirmation?")
+    last = speak_then_silence(d)
+    d.observe_transcript(TranscriptEvent("Yeah, my email is asad.", is_final=True), last)
+    assert not d.should_commit(last + 0.3)
+    assert d.should_commit(last + 0.61)
+
+    d.reset()  # the agent's question still frames the caller's next attempt
+    last = speak_then_silence(d, t0=10)
+    d.observe_transcript(TranscriptEvent("My name is Aaron.", is_final=True), last)
+    assert d.required_silence_ms() == 600
+
+    d.observe_agent_turn("Thank you, Aaron. Is this about employment or tenancy?")
+    assert d.required_silence_ms() == 250
+
+
+def test_silence_detector_ignores_agent_context() -> None:
+    d = SilenceEndpointDetector(silence_ms=700)
+    d.observe_agent_turn("What's your email?")
+    last = speak_then_silence(d)
+    assert d.should_commit(last + 0.71)

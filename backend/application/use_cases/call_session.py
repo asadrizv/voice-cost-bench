@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass
 
@@ -20,6 +21,8 @@ from backend.domain.entities.call import Call
 from backend.domain.entities.latency import TurnTimeline
 from backend.domain.services.cost_calculator import CostCalculator
 from backend.domain.value_objects.audio import AudioChunk
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -85,6 +88,7 @@ class CallSession:
     async def run(self, audio_in: AsyncIterable[AudioChunk]) -> Call:
         stt_task = asyncio.create_task(self._consume_stt())
         ticker = asyncio.create_task(self._tick())
+        warmup = asyncio.create_task(self._prewarm_llm())
         failed = False
         try:
             self._start_turn(
@@ -106,9 +110,10 @@ class CallSession:
         finally:
             await self._finish_turn(interrupt=True)
             self._stt_in.put_nowait(None)
-            ticker.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await ticker
+            for background in (ticker, warmup):
+                background.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await background
             try:
                 await asyncio.wait_for(stt_task, timeout=2.0)
             except (TimeoutError, asyncio.CancelledError):
@@ -206,6 +211,7 @@ class CallSession:
             self._ctx.history.append(ChatMessage("user", turn.user_text))
         if turn.agent_text:
             self._ctx.history.append(ChatMessage("assistant", turn.agent_text))
+            self._endpointer.observe_agent_turn(turn.agent_text)
 
     async def _flush_transcript(self) -> str:
         future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
@@ -241,6 +247,18 @@ class CallSession:
                 self._interim = ""
                 if self._pending_flush is not None and not self._pending_flush.done():
                     self._pending_flush.set_result(text)
+
+    async def _prewarm_llm(self) -> None:
+        """Runs while the greeting plays; the first reply's prompt starts with exactly this."""
+        persona = self._ctx.persona
+        prefix = [
+            ChatMessage("system", persona.system_prompt),
+            ChatMessage("assistant", persona.greeting),
+        ]
+        try:
+            await self._ctx.pipeline.llm.prewarm(prefix)
+        except Exception:
+            log.warning("LLM prewarm failed; first turn will pay a cold prompt", exc_info=True)
 
     async def _tick(self) -> None:
         ctx = self._ctx

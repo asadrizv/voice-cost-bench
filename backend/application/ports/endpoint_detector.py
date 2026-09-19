@@ -17,6 +17,10 @@ class EndpointDetector(Protocol):
 
     def should_commit(self, now: float) -> bool: ...
 
+    def observe_agent_turn(self, text: str) -> None:
+        """What the agent just said. Survives reset(): it frames the caller's next turn."""
+        ...
+
     @property
     def speech_end(self) -> float | None:
         """Monotonic time the caller last stopped speaking, for perceived_delay."""

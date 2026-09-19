@@ -52,6 +52,12 @@ class FakeLlm:
         self._usage = usage
         self._error = error
         self.calls: list[list[ChatMessage]] = []
+        self.prewarmed: list[list[ChatMessage]] = []
+
+    async def prewarm(self, messages: Sequence[ChatMessage]) -> None:
+        self.prewarmed.append(list(messages))
+        if self._error is not None:
+            raise self._error
 
     async def complete(
         self, messages: Sequence[ChatMessage], sampling: SamplingParams

@@ -37,3 +37,8 @@ class LlmPort(Protocol):
     ) -> AsyncIterator[LlmEvent]:
         """Streams TokenDelta events and ends with exactly one TokenUsage."""
         ...
+
+    async def prewarm(self, messages: Sequence[ChatMessage]) -> None:
+        """Best-effort: get `messages` into the server's prompt cache before the first real
+        turn. A no-op where the server caches prefixes itself or would bill for it."""
+        ...

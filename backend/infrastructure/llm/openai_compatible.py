@@ -33,6 +33,9 @@ class OpenAICompatibleLlm:
     def _extra_body(self, sampling: SamplingParams) -> dict[str, Any] | None:
         return None
 
+    async def prewarm(self, messages: Sequence[ChatMessage]) -> None:
+        return None
+
     async def complete(
         self, messages: Sequence[ChatMessage], sampling: SamplingParams
     ) -> AsyncIterator[LlmEvent]:

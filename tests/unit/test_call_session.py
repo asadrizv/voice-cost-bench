@@ -249,3 +249,42 @@ async def test_speech_during_the_agents_reply_is_not_billed_as_response_delay() 
     assert reply.user_text == "Thank you."
     assert reply.latency is not None
     assert reply.latency.perceived_delay < 1500  # not the ~4.7 s since the caller spoke
+
+
+async def test_endpointer_hears_what_the_agent_said() -> None:
+    world = make_world(replies=["May I have your email?"], utterances=["Hello."])
+    session, _, ctx = await make_session(world)
+    heard: list[str] = []
+    endpointer = session._endpointer  # noqa: SLF001
+    original = endpointer.observe_agent_turn
+    endpointer.observe_agent_turn = lambda text: (heard.append(text), original(text))[1]  # type: ignore[method-assign]
+    caller = Caller(world, [600])
+    caller.session = session
+    await session.run(caller.frames())
+    assert [h.strip() for h in heard] == [ctx.persona.greeting, "May I have your email?"]
+
+
+async def test_llm_prompt_is_prewarmed_with_the_first_turns_prefix() -> None:
+    world = make_world(utterances=["Hello."])
+    session, _, ctx = await make_session(world)
+    caller = Caller(world, [600])
+    caller.session = session
+    await session.run(caller.frames())
+    (prefix,) = world.llm.prewarmed
+    assert [m.content for m in prefix] == [ctx.persona.system_prompt, ctx.persona.greeting]
+    first_turn = world.llm.calls[0]
+    assert [m.content for m in first_turn[:2]] == [m.content for m in prefix]
+
+
+async def test_prewarm_failure_does_not_affect_the_call() -> None:
+    world = make_world(utterances=["Hello."])
+    session, _, ctx = await make_session(world)
+
+    async def broken(messages):  # type: ignore[no-untyped-def]
+        raise RuntimeError("ollama restarting")
+
+    world.llm.prewarm = broken  # type: ignore[method-assign]
+    caller = Caller(world, [600])
+    caller.session = session
+    call = await session.run(caller.frames())
+    assert call.status.value == "completed" and len(call.turns) == 2

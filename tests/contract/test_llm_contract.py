@@ -102,3 +102,14 @@ async def test_ollama_switches_thinking_off_with_reasoning_effort() -> None:
     await run(build("ollama", recorder))
     assert recorder.requests[0]["reasoning_effort"] == "none"
     assert "chat_template_kwargs" not in recorder.requests[0]
+
+
+async def test_only_ollama_prewarms() -> None:
+    for kind, expected in (("openai", 0), ("vllm", 0), ("ollama", 1)):
+        recorder = Recorder("stream_with_usage.txt")
+        await build(kind, recorder).prewarm(MESSAGES)
+        assert len(recorder.requests) == expected, kind
+    recorder = Recorder("stream_with_usage.txt")
+    await build("ollama", recorder).prewarm(MESSAGES)
+    assert recorder.requests[0]["max_tokens"] == 1
+    assert recorder.requests[0]["messages"][0]["content"] == "You are Clara."

@@ -67,6 +67,9 @@ class SilenceEndpointDetector:
         silence = self._speech.silence_ms(now)
         return silence is not None and silence >= self._silence_ms
 
+    def observe_agent_turn(self, text: str) -> None:
+        return None
+
     @property
     def speech_end(self) -> float | None:
         return self._speech.last_speech
@@ -85,6 +88,25 @@ _INCOMPLETE_TAIL = frozenset(
     habe
     """.split()  # noqa: SIM905
 )
+# Things people dictate in chunks, pausing after each: a full stop there is not the end of
+# the turn. English and German, matched as word stems in the agent's last question.
+_DICTATION_CUES = re.compile(
+    r"\b(e-?mail|phone|number|name|spell|address|postcode|zip|date of birth|birthday|"
+    r"telefon|nummer|namen?|buchstabier|adresse|anschrift|postleitzahl|geburtsdatum)",
+    re.IGNORECASE,
+)
+_SENTENCES = re.compile(r"[^.!?]+[.!?]*")
+
+
+def expects_dictation(agent_text: str) -> bool:
+    """True when the agent's last question asks for something spoken in chunks. Only the
+    last question counts: "Thanks, Aaron. Is this about employment?" asks for nothing."""
+    sentences = [s.strip() for s in _SENTENCES.findall(agent_text) if s.strip()]
+    questions = [s for s in sentences if s.endswith("?")]
+    target = questions[-1] if questions else (sentences[-1] if sentences else "")
+    return bool(_DICTATION_CUES.search(target))
+
+
 _TRAILING_PUNCT = re.compile(r"[\"')\]\s]+$")
 
 
@@ -114,6 +136,8 @@ class SemanticEndpointDetector:
 
     The silence required scales with how complete the transcript looks: a clear question
     commits after `min_silence_ms`, a dangling "and my…" holds out to `max_silence_ms`.
+    After the agent asks for an email, number or name, a finished-looking sentence still
+    gets `default_silence_ms`: "My email is asad." is usually followed by "at hotmail".
     """
 
     def __init__(
@@ -129,6 +153,7 @@ class SemanticEndpointDetector:
         self._classifier = classifier
         self._cached_text: str | None = None
         self._cached_wait = default_silence_ms
+        self._dictation = False
         self.reset()
 
     def reset(self) -> None:
@@ -141,6 +166,10 @@ class SemanticEndpointDetector:
 
     def observe_transcript(self, event: TranscriptEvent, now: float) -> None:
         self._transcript.observe(event)
+
+    def observe_agent_turn(self, text: str) -> None:
+        self._dictation = expects_dictation(text)
+        self._cached_text = None
 
     def required_silence_ms(self) -> float:
         text = self._transcript.text
@@ -166,7 +195,7 @@ class SemanticEndpointDetector:
             return self._default
         p = self._classifier(text)
         if p >= 0.8:
-            return self._min
+            return self._default if self._dictation else self._min
         if p <= 0.2:
             return self._max
         return self._default
