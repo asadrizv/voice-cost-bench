@@ -20,3 +20,4 @@ fixtures/audio/
 frontend/e2e/*.wav
 mutants/
 coverage.xml
+.next-build/
