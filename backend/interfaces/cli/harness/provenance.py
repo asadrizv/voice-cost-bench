@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 import yaml
 
+from backend.application.services.endpointing import EndpointerKind
 from backend.infrastructure.config.settings import REPO_ROOT, Settings
 from backend.infrastructure.telemetry.nvml_gpu_telemetry import detect_gpu_telemetry
 from backend.interfaces.cli.harness.caller import Conversation
@@ -41,7 +42,7 @@ def collect(
     settings: Settings,
     pipeline: str,
     conversation: Conversation,
-    endpointer: str,
+    endpointer: EndpointerKind,
     simulated: bool,
     rates_raw: dict[str, Any],
 ) -> dict[str, Any]:
@@ -69,7 +70,7 @@ def collect(
         },
         "persona": conversation.persona,
         "persona_sha256": _sha256(settings.personas_dir / f"{conversation.persona}.yaml"),
-        "endpointer": endpointer,
+        "endpointer": endpointer.value,
         "harness_host": {
             "python": platform.python_version(),
             "machine": platform.machine(),

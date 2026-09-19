@@ -38,7 +38,7 @@ async def config(
     return {
         "default_pipeline": s.pipeline.value,
         "personas": c.personas.available(),
-        "endpointer": s.endpointer,
+        "endpointer": s.endpointer.value,
         "rate_card_verified_on": card.verified_on,
         "rates": {k.value: rates(card.for_pipeline(k)) for k in PipelineKind},
         "client_gpu_quotes": [

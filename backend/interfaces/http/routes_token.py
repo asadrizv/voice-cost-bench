@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from livekit import api
 from pydantic import BaseModel
 
+from backend.application.services.endpointing import EndpointerKind
 from backend.domain.value_objects.pipeline_kind import PipelineKind
 from backend.infrastructure.config.settings import Settings
 from backend.interfaces.container import Container
@@ -21,7 +22,7 @@ AGENT_NAME = "voice-cost-bench"
 class TokenRequest(BaseModel):
     pipeline: PipelineKind | None = None
     persona: str | None = None
-    endpointer: str | None = None
+    endpointer: EndpointerKind | None = None
 
 
 class TokenResponse(BaseModel):
@@ -48,12 +49,10 @@ def create_token(
     if persona not in c.personas.available():
         raise HTTPException(404, f"unknown persona {persona}")
     endpointer = body.endpointer or s.endpointer
-    if endpointer not in ("semantic", "silence"):
-        raise HTTPException(422, "endpointer must be semantic or silence")
 
     call_id = f"call-{secrets.token_hex(6)}"
     metadata = json.dumps(
-        {"pipeline": pipeline.value, "persona": persona, "endpointer": endpointer}
+        {"pipeline": pipeline.value, "persona": persona, "endpointer": endpointer.value}
     )
     token = (
         api.AccessToken(s.livekit_api_key, s.livekit_api_secret)

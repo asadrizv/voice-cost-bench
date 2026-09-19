@@ -17,6 +17,7 @@ from livekit import rtc
 from livekit.agents import AutoSubscribe, JobContext, JobExecutorType, WorkerOptions, cli
 
 from backend.application.services.concurrency_supervisor import CapacityExceeded
+from backend.application.services.endpointing import EndpointerKind
 from backend.application.use_cases.start_call import BudgetExceeded
 from backend.domain.value_objects.audio import AudioChunk
 from backend.domain.value_objects.pipeline_kind import PipelineKind
@@ -93,7 +94,7 @@ async def entrypoint(ctx: JobContext) -> None:
     options = _call_options(ctx)
     pipeline = PipelineKind(options.get("pipeline", settings.pipeline.value))
     persona = options.get("persona", settings.persona)
-    endpointer = options.get("endpointer", settings.endpointer)
+    endpointer = EndpointerKind(options.get("endpointer", settings.endpointer))
 
     async with _connect_lock():
         await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)

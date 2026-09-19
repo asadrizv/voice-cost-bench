@@ -6,6 +6,7 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from backend.application.services.endpointing import EndpointerKind
 from backend.domain.value_objects.pipeline_kind import PipelineKind
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -18,7 +19,7 @@ class Settings(BaseSettings):
 
     pipeline: PipelineKind = PipelineKind.API
     persona: str = "law_firm"
-    endpointer: str = Field("semantic", description="semantic | silence")
+    endpointer: EndpointerKind = EndpointerKind.SEMANTIC
 
     livekit_url: str = "ws://localhost:7880"
     livekit_public_url: str = ""

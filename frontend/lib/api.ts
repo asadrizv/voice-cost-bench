@@ -1,6 +1,10 @@
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
 
 export type Pipeline = "api" | "selfhosted";
+/** Mirrors EndpointerKind in backend/application/services/endpointing.py. */
+export const ENDPOINTERS = { semantic: "Semantic endpointing", silence: "Silence threshold" } as const;
+export type Endpointer = keyof typeof ENDPOINTERS;
+export const DEFAULT_ENDPOINTER: Endpointer = "semantic";
 export const STAGES = ["stt", "llm", "tts", "gpu", "telephony"] as const;
 export type Stage = (typeof STAGES)[number];
 export type Cost = Record<Stage | "total", number>;
@@ -105,7 +109,7 @@ async function get<T>(path: string): Promise<T> {
 }
 
 export const api = {
-  token: async (body: { pipeline: Pipeline; persona: string; endpointer: string }) => {
+  token: async (body: { pipeline: Pipeline; persona: string; endpointer: Endpointer }) => {
     const res = await fetch(`${API_URL}/token`, {
       method: "POST",
       headers: { "content-type": "application/json" },

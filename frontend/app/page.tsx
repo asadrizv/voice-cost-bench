@@ -7,7 +7,7 @@ import { LatencyBreakdown } from "@/components/LatencyBreakdown";
 import { LiveCostPanel } from "@/components/LiveCostPanel";
 import { PipelineToggle } from "@/components/PipelineToggle";
 import { Transcript } from "@/components/Transcript";
-import { api, type Pipeline, type TokenResponse } from "@/lib/api";
+import { api, DEFAULT_ENDPOINTER, ENDPOINTERS, type Endpointer, type Pipeline, type TokenResponse } from "@/lib/api";
 import { useLiveMetrics } from "@/lib/useLiveMetrics";
 
 type CallStatus = { state: string; reason?: string; ended_by?: string };
@@ -26,7 +26,7 @@ function StatusListener({ onStatus }: { onStatus: (s: CallStatus) => void }) {
 export default function CallPage() {
   const [pipeline, setPipeline] = useState<Pipeline>("api");
   const [persona, setPersona] = useState("law_firm");
-  const [endpointer, setEndpointer] = useState("semantic");
+  const [endpointer, setEndpointer] = useState<Endpointer>(DEFAULT_ENDPOINTER);
   const [session, setSession] = useState<TokenResponse | null>(null);
   const [callId, setCallId] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
@@ -86,9 +86,10 @@ export default function CallPage() {
           <option value="law_firm">English</option>
           <option value="law_firm_de">Deutsch</option>
         </select>
-        <select aria-label="Endpointing" value={endpointer} disabled={!!session} onChange={(e) => setEndpointer(e.target.value)}>
-          <option value="semantic">Semantic endpointing</option>
-          <option value="silence">Silence threshold</option>
+        <select aria-label="Endpointing" value={endpointer} disabled={!!session} onChange={(e) => setEndpointer(e.target.value as Endpointer)}>
+          {Object.entries(ENDPOINTERS).map(([value, label]) => (
+            <option key={value} value={value}>{label}</option>
+          ))}
         </select>
         <CallButton active={!!session} connecting={connecting || !configLoaded} onStart={start} onEnd={end} />
         <button type="button" className="btn ghost" onClick={reset} disabled={!!session}>Reset</button>

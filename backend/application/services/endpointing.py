@@ -2,9 +2,15 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from enum import StrEnum
 
 from backend.application.ports.stt_port import TranscriptEvent
 from backend.domain.value_objects.audio import AudioChunk
+
+
+class EndpointerKind(StrEnum):
+    SEMANTIC = "semantic"
+    SILENCE = "silence"
 
 
 class _TranscriptTracker:

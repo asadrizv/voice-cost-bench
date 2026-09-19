@@ -12,6 +12,7 @@ from backend.application.ports.metrics_sink import MetricsSink
 from backend.application.ports.pipeline_provider import PipelineProvider
 from backend.application.services.concurrency_supervisor import ConcurrencySupervisor
 from backend.application.services.endpointing import (
+    EndpointerKind,
     SemanticEndpointDetector,
     SilenceEndpointDetector,
 )
@@ -60,16 +61,18 @@ class Container:
     compute_cost: ComputeCallCost
     compare: ComparePipelines
 
-    def endpointer(self, kind: str | None = None) -> EndpointDetector:
-        if (kind or self.settings.endpointer) == "silence":
-            return SilenceEndpointDetector()
-        return SemanticEndpointDetector()
+    def endpointer(self, kind: EndpointerKind | None = None) -> EndpointDetector:
+        match kind or self.settings.endpointer:
+            case EndpointerKind.SILENCE:
+                return SilenceEndpointDetector()
+            case EndpointerKind.SEMANTIC:
+                return SemanticEndpointDetector()
 
     def session(
         self,
         ctx: CallContext,
         output: AudioOutput,
-        endpointer: str | None = None,
+        endpointer: EndpointerKind | None = None,
         config: SessionConfig | None = None,
     ) -> CallSession:
         return CallSession(

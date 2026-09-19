@@ -9,10 +9,12 @@ from pathlib import Path
 import pytest
 
 from backend.application.services.concurrency_supervisor import ConcurrencySupervisor
+from backend.application.services.endpointing import EndpointerKind
 from backend.domain.value_objects.pipeline_kind import PipelineKind
 from backend.infrastructure.config.settings import Settings
 from backend.infrastructure.persistence.inmemory_call_repository import InMemoryCallRepository
 from backend.infrastructure.simulated.gpu_model import SimulatedGpu, SimulatedGpuProfile
+from backend.interfaces.cli import loadtest
 from backend.interfaces.cli.harness import report
 from backend.interfaces.cli.harness.caller import load_conversation
 from backend.interfaces.cli.harness.runner import LevelRunner
@@ -39,7 +41,9 @@ async def test_level_run_produces_costed_timed_calls() -> None:
         supervisors={PipelineKind.SELFHOSTED: supervisor},
     )
     gpu = SimulatedGpu(SimulatedGpuProfile(speech_s_per_char=0.01))
-    runner = LevelRunner(container, PipelineKind.SELFHOSTED, conversation, "semantic", gpu)
+    runner = LevelRunner(
+        container, PipelineKind.SELFHOSTED, conversation, EndpointerKind.SEMANTIC, gpu
+    )
 
     run = await runner.run(concurrency=3, duration_s=1)
 
@@ -91,3 +95,10 @@ def test_wer_normalises_case_and_punctuation() -> None:
     assert report.word_error_rate("Tuesday at ten, please.", "tuesday at ten please") == 0
     assert report.word_error_rate("a b c d", "a x c d") == 0.25
     assert report.word_error_rate("", "anything") == 0
+
+
+def test_harness_rejects_an_unknown_endpointer(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        loadtest.main(["sweep", "--pipeline", "simulated", "--endpointer", "vibes"])
+    assert exit_info.value.code == 2
+    assert "--endpointer" in capsys.readouterr().err

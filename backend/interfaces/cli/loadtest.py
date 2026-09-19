@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.application.ports.metrics_sink import MetricsSink
+from backend.application.services.endpointing import EndpointerKind
 from backend.domain.value_objects.pipeline_kind import PipelineKind
 from backend.infrastructure.config.settings import REPO_ROOT, Settings, get_settings
 from backend.infrastructure.persistence.postgres_call_repository import SqlCallRepository
@@ -145,7 +146,12 @@ def main(argv: list[str] | None = None) -> None:
         p.add_argument("--pipeline", choices=["api", "selfhosted", "simulated"], required=True)
         p.add_argument("--conversation", default="intake_en")
         p.add_argument("--duration", type=int, default=120, help="seconds per level")
-        p.add_argument("--endpointer", choices=["semantic", "silence"], default="semantic")
+        p.add_argument(
+            "--endpointer",
+            type=EndpointerKind,
+            choices=list(EndpointerKind),
+            default=EndpointerKind.SEMANTIC,
+        )
         p.add_argument(
             "--forward",
             action="store_true",

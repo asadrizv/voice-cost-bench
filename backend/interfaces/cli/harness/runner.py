@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 
 from backend.application.ports.pipeline_provider import Pipeline
 from backend.application.services.concurrency_supervisor import CapacityExceeded
+from backend.application.services.endpointing import EndpointerKind
 from backend.application.use_cases.start_call import BudgetExceeded
 from backend.domain.entities.call import Call
 from backend.domain.value_objects.pipeline_kind import PipelineKind
@@ -46,7 +47,7 @@ class LevelRunner:
         container: Container,
         pipeline: PipelineKind,
         conversation: Conversation,
-        endpointer: str,
+        endpointer: EndpointerKind,
         simulated: SimulatedGpu | None = None,
     ) -> None:
         self._c = container
