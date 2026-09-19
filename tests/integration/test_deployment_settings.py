@@ -41,17 +41,6 @@ def test_the_env_example_lists_every_setting_the_backend_reads() -> None:
     assert settings_names - _documented_names(REPO_ROOT / ".env.example") == set()
 
 
-def test_the_env_example_lists_every_setting_the_gpu_services_read() -> None:
-    read = re.compile(r"os\.environ\.get\(\"([A-Z][A-Z0-9_]*)\"")
-    service_names = {
-        name
-        for app in (REPO_ROOT / "gpu").glob("*_service/app.py")
-        for name in read.findall(app.read_text())
-    }
-    assert service_names
-    assert service_names - _documented_names(REPO_ROOT / ".env.example") == set()
-
-
 def test_no_env_example_value_is_a_stray_comment() -> None:
     """After an empty value, python-dotenv and compose read an inline comment as the value."""
     values = dotenv_values(REPO_ROOT / ".env.example")

@@ -3,6 +3,7 @@ on real fixture audio, real-time pacing. Short conversation to keep it under ~15
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
@@ -367,6 +368,26 @@ def test_provenance_records_what_ran_and_whether_it_was_confirmed(
     ]
     assert set(info["models"]) == model_facts
     assert "whisper" not in str(info["models"]) and "deepgram" not in str(info["models"])
+
+
+def test_provenance_hashes_the_serving_config_vllm_starts_from() -> None:
+    conversation = Conversation("intake_en", "law_firm", "en", ["Hello."], [[]])
+    settings = Settings(database_url="", serving_config="llama-8b-l40s.yaml")
+
+    info = provenance.collect(
+        settings,
+        "selfhosted",
+        conversation,
+        EndpointerKind.SEMANTIC,
+        simulated=True,
+        rates_raw={},
+        components=[],
+        catalogue_version=7,
+    )
+
+    served = (settings.config_dir / "serving" / "llama-8b-l40s.yaml").read_bytes()
+    assert info["models"]["serving_config"] == "llama-8b-l40s.yaml"
+    assert info["models"]["serving_config_sha256"] == hashlib.sha256(served).hexdigest()
 
 
 def test_provenance_refuses_to_record_a_serving_config_that_does_not_exist() -> None:
