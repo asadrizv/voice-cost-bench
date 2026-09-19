@@ -87,6 +87,9 @@ make wer-audio wer # STT word error rate, English and German, both pipelines
 block: git SHA and dirty flag, model and pinned revision, vLLM version, serving-config hash,
 GPU SKU/region/price, rate-card date and hash, fixture audio hash, persona hash, endpointer.
 A level whose harness fell behind real time is flagged invalid rather than reported.
+Each level also reports caller-observed delay (p50/p95/p99), timed from the fixture audio
+and the agent's audio rather than our own endpointer, so it compares with Openbenchmarks'
+TTFAB; the benchmark page says how it is measured.
 
 `make benchmark-sim` runs the same sweep offline against a queueing model of the GPU. It
 exercises the harness; its output is stamped `simulated` and the UI says so.

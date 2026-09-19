@@ -144,6 +144,12 @@ export interface BenchmarkLevel {
   latency_ms: Record<LatencyStage, { p50: number; p95: number; mean: number }>;
   end_to_end_p95_ms: number;
   perceived_delay_p95_ms: number;
+  /** Absent from runs before caller-observed delay was measured; null when no turn was answered. */
+  caller_observed_p50_ms?: number | null;
+  caller_observed_p95_ms?: number | null;
+  caller_observed_p99_ms?: number | null;
+  caller_observed_turns?: number;
+  caller_observed_unanswered?: number;
   within_budget: boolean;
   stt_wer: number | null;
   harness_valid: boolean;

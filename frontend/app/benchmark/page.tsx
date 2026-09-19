@@ -36,6 +36,9 @@ export default function BenchmarkPage() {
   const carriers = data?.telephony_quotes ?? [];
   const priced = carriers.filter((q) => q.per_minute_usd != null);
   const unpriced = carriers.filter((q) => q.per_minute_usd == null);
+  const callerObserved = levels.flatMap((l) =>
+    l.caller_observed_p95_ms == null ? [] : [{ x: l.concurrency, y: l.caller_observed_p95_ms }],
+  );
 
   return (
     <main>
@@ -118,6 +121,9 @@ export default function BenchmarkPage() {
                     points: levels.map((l) => ({ x: l.concurrency, y: l.end_to_end_p95_ms })) },
                   { key: "perceived", label: "Perceived", color: "var(--series-2)",
                     points: levels.map((l) => ({ x: l.concurrency, y: l.perceived_delay_p95_ms })) },
+                  ...(callerObserved.length > 0
+                    ? [{ key: "caller", label: "Caller-observed", color: "var(--series-3)", points: callerObserved }]
+                    : []),
                 ]}
                 references={[
                   { label: "900 ms budget", y: data.budgets_ms.end_to_end_p95_ms },
@@ -136,6 +142,7 @@ export default function BenchmarkPage() {
                     <th className="num">Concurrent</th><th className="num">Calls</th><th className="num">Turns</th>
                     <th className="num">Cost / min</th><th className="num">GPU / min</th><th className="num">Telephony / min</th>
                     <th className="num">E2E p50</th><th className="num">E2E p95</th><th className="num">Perceived p95</th>
+                    <th className="num">Caller p50</th><th className="num">Caller p95</th><th className="num">Caller p99</th>
                     <th className="num">STT WER</th><th>Budget</th><th>Harness</th>
                   </tr>
                 </thead>
@@ -151,6 +158,12 @@ export default function BenchmarkPage() {
                       <td className="num">{ms(l.latency_ms.end_to_end.p50)}</td>
                       <td className="num">{ms(l.end_to_end_p95_ms)}</td>
                       <td className="num">{ms(l.perceived_delay_p95_ms)}</td>
+                      <td className="num">{ms(l.caller_observed_p50_ms)}</td>
+                      <td className="num">{ms(l.caller_observed_p95_ms)}</td>
+                      <td className="num">
+                        {ms(l.caller_observed_p99_ms)}
+                        {l.caller_observed_unanswered ? <span className="muted small"> ({l.caller_observed_unanswered} unanswered)</span> : null}
+                      </td>
                       <td className="num">{l.stt_wer == null ? "–" : `${(l.stt_wer * 100).toFixed(1)}%`}</td>
                       <td><span className="badge"><span className="status-dot" style={{ background: l.within_budget ? "var(--good)" : "var(--critical)" }} />{l.within_budget ? "within" : "over"}</span></td>
                       <td>{l.harness_valid ? <span className="muted small">ok</span> : <span className="badge"><span className="status-dot" style={{ background: "var(--warning)" }} />fell behind</span>}</td>
@@ -159,6 +172,13 @@ export default function BenchmarkPage() {
                 </tbody>
               </table>
             </div>
+            <p className="muted small" data-testid="caller-observed-note">
+              <strong>Caller p50/p95/p99</strong> is caller-observed delay, timed outside the call from its audio: the last
+              frame of each fixture utterance above −45 dBFS to the first agent audio above it, so a near-silent lead-in
+              doesn&apos;t count. That matches Openbenchmarks&apos; TTFAB (caller stops speaking to first agent audio, measured
+              from recordings), so the two are comparable. <strong>Perceived</strong> is timed inside the call from our own
+              endpointer. A turn the agent never answers is counted as unanswered, not timed.
+            </p>
           </section>
 
           {priced.length > 0 && (
