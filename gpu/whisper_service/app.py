@@ -62,6 +62,33 @@ class FasterWhisperTranscriber:
         return " ".join(s.text.strip() for s in segments).strip()
 
 
+class MlxWhisperTranscriber:
+    """Apple Silicon: same Whisper weights on the Mac's GPU via MLX. For the local demo;
+    its latency says nothing about the L40S benchmark."""
+
+    def __init__(self) -> None:
+        import mlx_whisper
+
+        self._transcribe = mlx_whisper.transcribe
+        self._repo = os.environ.get("WHISPER_MLX_REPO", "mlx-community/whisper-large-v3-turbo")
+
+    def transcribe(self, audio: np.ndarray, language: str) -> str:
+        result = self._transcribe(
+            audio,
+            path_or_hf_repo=self._repo,
+            language=language,
+            condition_on_previous_text=False,
+            without_timestamps=True,
+        )
+        return str(result.get("text", "")).strip()
+
+
+def default_transcriber() -> Transcriber:
+    if os.environ.get("WHISPER_BACKEND", "faster-whisper") == "mlx":
+        return MlxWhisperTranscriber()
+    return FasterWhisperTranscriber()
+
+
 class Utterance:
     """Audio since the last flush, with leading silence dropped. Whisper hallucinates on
     silence ("Thank you."), and the caller is silent for as long as the agent talks."""
@@ -92,7 +119,7 @@ class Utterance:
 
 
 def create_app(
-    transcriber_factory: Callable[[], Transcriber] = FasterWhisperTranscriber,
+    transcriber_factory: Callable[[], Transcriber] = default_transcriber,
     workers: int = int(os.environ.get("WHISPER_WORKERS", "3")),
     interim_interval_s: float = 0.5,
 ) -> FastAPI:

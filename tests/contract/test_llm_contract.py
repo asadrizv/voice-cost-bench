@@ -10,6 +10,7 @@ import pytest
 
 from backend.application.ports.llm_port import ChatMessage, LlmPort, TokenDelta, TokenUsage
 from backend.domain.entities.persona import SamplingParams
+from backend.infrastructure.llm.ollama_llm import OllamaLlm
 from backend.infrastructure.llm.openai_llm import OpenAILlm
 from backend.infrastructure.llm.vllm_llm import VllmLlm
 
@@ -40,10 +41,12 @@ def build(kind: str, recorder: Recorder) -> LlmPort:
     client = httpx.AsyncClient(transport=httpx.MockTransport(recorder))
     if kind == "openai":
         return OpenAILlm("gpt-4o-mini", "sk-test", http_client=client)
+    if kind == "ollama":
+        return OllamaLlm("qwen3.5:9b", "unused", base_url="http://mac:11434/v1", http_client=client)
     return VllmLlm("voice-llm", "unused", base_url="http://gpu:8000/v1", http_client=client)
 
 
-@pytest.fixture(params=["openai", "vllm"])
+@pytest.fixture(params=["openai", "vllm", "ollama"])
 def kind(request: pytest.FixtureRequest) -> str:
     return str(request.param)
 
@@ -92,3 +95,10 @@ async def test_vllm_switches_thinking_off_per_request() -> None:
     openai_recorder = Recorder("stream_with_usage.txt")
     await run(build("openai", openai_recorder))
     assert "chat_template_kwargs" not in openai_recorder.requests[0]
+
+
+async def test_ollama_switches_thinking_off_with_reasoning_effort() -> None:
+    recorder = Recorder("stream_with_usage.txt")
+    await run(build("ollama", recorder))
+    assert recorder.requests[0]["reasoning_effort"] == "none"
+    assert "chat_template_kwargs" not in recorder.requests[0]

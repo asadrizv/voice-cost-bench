@@ -1,7 +1,7 @@
 "use client";
 
 import { LiveKitRoom, RoomAudioRenderer, useDataChannel } from "@livekit/components-react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { CallButton } from "@/components/CallButton";
 import { LatencyBreakdown } from "@/components/LatencyBreakdown";
 import { LiveCostPanel } from "@/components/LiveCostPanel";
@@ -30,6 +30,13 @@ export default function CallPage() {
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const live = useLiveMetrics(callId);
+  const [env, setEnv] = useState<{ local: boolean; simulated: boolean }>({ local: false, simulated: false });
+  useEffect(() => {
+    api
+      .config()
+      .then((c) => setEnv({ local: Boolean(c.selfhosted_on_local_machine), simulated: Boolean(c.simulated) }))
+      .catch(() => undefined);
+  }, []);
 
   const start = useCallback(async () => {
     setError(null);
@@ -76,6 +83,17 @@ export default function CallPage() {
       </div>
 
       {error && <div className="banner error" role="alert">{error}</div>}
+      {env.simulated && (
+        <div className="banner warn" role="note">
+          <strong>Simulated providers.</strong> Replies are a tone and a fixed script; costs are fiction.
+        </div>
+      )}
+      {!env.simulated && env.local && pipeline === "selfhosted" && (
+        <div className="banner warn" role="note">
+          <strong>Self-hosted models are running on this machine.</strong> Latency reflects a laptop, and cost is priced as
+          a share of the benchmark L40S. Neither is a benchmark figure.
+        </div>
+      )}
 
       {session && (
         <LiveKitRoom serverUrl={session.url} token={session.token} connect audio video={false}

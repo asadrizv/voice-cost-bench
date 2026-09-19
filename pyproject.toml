@@ -25,6 +25,8 @@ dependencies = [
 
 [project.optional-dependencies]
 gpu = ["nvidia-ml-py>=12.560"]
+# Whisper + Kokoro services on an Apple Silicon Mac, for a fully local demo.
+local = ["mlx-whisper>=0.4", "kokoro>=0.9.4", "soundfile>=0.12"]
 
 [dependency-groups]
 dev = [

@@ -5,6 +5,7 @@ from collections.abc import Callable
 from backend.application.ports.pipeline_provider import Pipeline
 from backend.domain.value_objects.pipeline_kind import PipelineKind
 from backend.infrastructure.config.settings import Settings
+from backend.infrastructure.llm.ollama_llm import OllamaLlm
 from backend.infrastructure.llm.openai_llm import OpenAILlm
 from backend.infrastructure.llm.vllm_llm import VllmLlm
 from backend.infrastructure.stt.deepgram_stt import DeepgramStt
@@ -39,10 +40,11 @@ def _api(s: Settings) -> Pipeline:
 
 
 def _selfhosted(s: Settings) -> Pipeline:
+    server = OllamaLlm if s.llm_server == "ollama" else VllmLlm
     return Pipeline(
         kind=PipelineKind.SELFHOSTED,
         stt=WhisperStt(s.whisper_ws_url),
-        llm=VllmLlm(s.vllm_model, "unused", base_url=s.vllm_base_url),
+        llm=server(s.vllm_model, "unused", base_url=s.vllm_base_url),
         tts=KokoroTts(s.kokoro_url),
         uses_gpu=True,
     )

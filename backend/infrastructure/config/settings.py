@@ -35,6 +35,7 @@ class Settings(BaseSettings):
 
     vllm_base_url: str = "http://localhost:8000/v1"
     vllm_model: str = "voice-llm"
+    llm_server: str = Field("vllm", description="vllm | ollama (laptop demo)")
     whisper_ws_url: str = "ws://localhost:8001/v1/stream"
     kokoro_url: str = "http://localhost:8002"
 
@@ -45,6 +46,9 @@ class Settings(BaseSettings):
     internal_token: str = "dev-internal-token"
     cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
+    selfhosted_on_local_machine: bool = False
+    """Self-hosted models are running on a laptop, not the benchmark GPU: the UI says so,
+    because latency and the L40S-priced cost then describe hardware nobody will deploy."""
     simulate_providers: bool = False
     """Both pipelines resolve to the simulated GPU model: runs the whole stack (LiveKit,
     agent, browser) with no keys and no GPU. Every cost it produces is fiction."""

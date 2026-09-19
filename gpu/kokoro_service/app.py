@@ -47,7 +47,9 @@ class KokoroSynthesizer:
     def _pipeline(self, lang_code: str):  # type: ignore[no-untyped-def]
         with self._lock:
             if lang_code not in self._pipelines:
-                self._pipelines[lang_code] = self._factory(lang_code=lang_code)
+                self._pipelines[lang_code] = self._factory(
+                    lang_code=lang_code, device=os.environ.get("KOKORO_DEVICE") or None
+                )
             return self._pipelines[lang_code]
 
     def synthesize(self, text: str, voice: str, speed: float) -> Iterator[np.ndarray]:

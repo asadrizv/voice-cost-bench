@@ -41,7 +41,7 @@ async def deepgram() -> AsyncIterator[SttPort]:
 
 @asynccontextmanager
 async def whisper() -> AsyncIterator[SttPort]:
-    async with run_asgi(create_app(StubTranscriber, workers=2, interim_interval_s=0.2)) as host:
+    async with run_asgi(create_app(StubTranscriber, workers=2, interim_interval_s=0.0)) as host:
         yield WhisperStt(f"ws://{host}/v1/stream")
 
 
@@ -63,6 +63,9 @@ async def speech_then(*extra: FlushSignal) -> AsyncIterator[AudioChunk | FlushSi
         yield chunk
         await asyncio.sleep(0.001)
     for item in extra:
+        # A caller pauses before the endpointer commits, and a flush cancels any interim
+        # still in flight, so flushing the instant audio ends would race the interim.
+        await asyncio.sleep(0.3)
         yield item
         await asyncio.sleep(0.3)
 

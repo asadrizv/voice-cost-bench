@@ -53,4 +53,6 @@ async def config(
         "api_spend_usd": await c.repository.total_spend_usd(PipelineKind.API),
         "api_spend_limit_usd": s.dev_spend_limit_usd,
         "selfhosted_ceiling": s.selfhosted_max_concurrency,
+        "selfhosted_on_local_machine": s.selfhosted_on_local_machine,
+        "simulated": s.simulate_providers,
     }
