@@ -1,8 +1,8 @@
 # Caller side of scripted intake calls. Every pipeline, every load-test caller and every
 # benchmark run replays exactly these, so the only variable is the adapter triple.
-# Audio: fixtures/audio/<conversation>/<nn>.wav, 16 kHz mono PCM16, made by
-# `make fixtures` (macOS `say`). Synthetic speech: fine for latency and cost, NOT a valid
-# basis for a published WER; see fixtures/wer/README.md.
+# Audio: fixtures/audio/<conversation>/<nn>.wav, 16 kHz mono PCM16, rendered locally by
+# `make fixtures` (macOS `say`, or espeak-ng on Linux) and never committed. Synthetic speech:
+# fine for latency and cost, NOT a valid basis for a published WER; see fixtures/wer/README.md.
 conversations:
   intake_en:
     persona: law_firm

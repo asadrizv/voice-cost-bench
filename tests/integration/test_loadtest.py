@@ -6,6 +6,8 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from backend.application.services.concurrency_supervisor import ConcurrencySupervisor
 from backend.domain.value_objects.pipeline_kind import PipelineKind
 from backend.infrastructure.config.settings import Settings
@@ -18,8 +20,12 @@ from backend.interfaces.container import build_container
 from tests.fakes import NullMetrics
 
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
+needs_audio = pytest.mark.skipif(
+    not (FIXTURES / "audio" / "intake_en").is_dir(), reason="no fixture audio: run `make fixtures`"
+)
 
 
+@needs_audio
 async def test_level_run_produces_costed_timed_calls() -> None:
     conversation = load_conversation(FIXTURES, "intake_en")
     conversation = replace(

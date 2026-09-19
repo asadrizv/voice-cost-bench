@@ -21,6 +21,7 @@ from gpu.whisper_service.app import create_app
 from tests.integration.servers import FakeDeepgram, run_asgi
 
 AUDIO = Path(__file__).resolve().parents[2] / "fixtures" / "audio" / "intake_en" / "00.wav"
+pytestmark = pytest.mark.skipif(not AUDIO.exists(), reason="no fixture audio: run `make fixtures`")
 
 
 class StubTranscriber:

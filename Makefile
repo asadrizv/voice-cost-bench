@@ -41,19 +41,19 @@ test-db: ## Throwaway Postgres for the repository tests
 	@until docker exec vcb-test-pg pg_isready -U postgres >/dev/null 2>&1; do sleep 1; done
 	@DATABASE_URL=$(TEST_DB) $(PY) alembic upgrade head >/dev/null
 
-test: test-db ## Everything except paid tests; coverage gate 90% on domain+application
+test: test-db fixtures ## Everything except paid tests; coverage gate 90% on domain+application
 	TEST_DATABASE_URL=$(TEST_DB) $(PY) pytest --timeout 120 --cov --cov-report=term
 
 test-paid: ## One real call per provider (costs cents; needs API keys)
 	$(PY) pytest -m paid tests/smoke -v
 
-e2e: ## Playwright: scripted browser call against the running stack
+e2e: fixtures ## Playwright: scripted browser call against the running stack
 	cd frontend && npx playwright test
 
-fixtures: ## Render conversation fixture audio (macOS `say`)
-	$(PY) python scripts/make_fixtures.py conversations
+fixtures: ## Render fixture and browser-test audio (macOS `say`, or espeak-ng on Linux)
+	$(PY) python scripts/make_fixtures.py e2e
 
-wer-audio: ## Render the WER corpus (macOS `say`, ~20 MB, not committed)
+wer-audio: ## Render the WER corpus (~20 MB, not committed)
 	$(PY) python scripts/make_fixtures.py wer
 
 wer: ## STT word error rate, both pipelines, German and English

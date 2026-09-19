@@ -3,7 +3,7 @@
 `sentences.yaml` holds the reference transcripts: English and German receptionist-call
 sentences, heavy on legal vocabulary (Kündigungsschutzklage, Nebenkostenabrechnung,
 Eigenbedarfskündigung...). `make wer-audio` renders each sentence with several macOS voices
-into `fixtures/audio/wer/` (not committed; ~20 MB).
+into `fixtures/audio/wer/` (not committed; ~20 MB). On Linux, espeak-ng stands in for `say`.
 
 **These recordings are synthetic.** TTS audio is cleaner than a phone line and has no real
 regional accent, so WER measured on it is optimistic and must not be published. It is

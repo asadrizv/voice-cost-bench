@@ -14,7 +14,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
+      - run: sudo apt-get update && sudo apt-get install -y espeak-ng
       - run: uv sync --frozen
+      - run: uv run python scripts/make_fixtures.py conversations
       - run: uv run ruff check . && uv run ruff format --check .
       - run: uv run mypy
       - run: uv run alembic upgrade head
