@@ -6,6 +6,8 @@ Protocol (per call, one socket):
   -> {"type": "close"}
   <- {"type": "transcript", "text": str, "is_final": bool, "flushed": bool}
 
+GET /v1/info -> {"engines": [{"id": str, "model": str}]}, what the loaded engine runs.
+
 Whisper isn't a streaming model. Interims come from re-transcribing the growing utterance
 buffer, and only when a worker is idle, so they never delay another call's final. Every
 flush is answered exactly once, empty text included.
@@ -47,15 +49,22 @@ def confident_text(segments: list[tuple[str, float]]) -> str:
 
 
 class Transcriber(Protocol):
+    engine: str
+    """The engine's id in config/components.yaml, where /transparency names it from."""
+    model: str
+
     def transcribe(self, audio: np.ndarray, language: str) -> str: ...
 
 
 class FasterWhisperTranscriber:
+    engine = "faster-whisper"
+
     def __init__(self) -> None:
         from faster_whisper import WhisperModel
 
+        self.model = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
         self._model = WhisperModel(
-            os.environ.get("WHISPER_MODEL", "large-v3-turbo"),
+            self.model,
             device=os.environ.get("WHISPER_DEVICE", "cuda"),
             compute_type=os.environ.get("WHISPER_COMPUTE_TYPE", "float16"),
         )
@@ -76,16 +85,18 @@ class MlxWhisperTranscriber:
     """Apple Silicon: same Whisper weights on the Mac's GPU via MLX. For the local demo;
     its latency says nothing about the L40S benchmark."""
 
+    engine = "mlx"
+
     def __init__(self) -> None:
         import mlx_whisper
 
         self._transcribe = mlx_whisper.transcribe
-        self._repo = os.environ.get("WHISPER_MLX_REPO", "mlx-community/whisper-large-v3-turbo")
+        self.model = os.environ.get("WHISPER_MLX_REPO", "mlx-community/whisper-large-v3-turbo")
 
     def transcribe(self, audio: np.ndarray, language: str) -> str:
         result = self._transcribe(
             audio,
-            path_or_hf_repo=self._repo,
+            path_or_hf_repo=self.model,
             language=language,
             condition_on_previous_text=False,
             without_timestamps=True,
@@ -93,10 +104,17 @@ class MlxWhisperTranscriber:
         return confident_text([(s["text"], s["avg_logprob"]) for s in result["segments"]])
 
 
+TRANSCRIBERS: tuple[type[FasterWhisperTranscriber | MlxWhisperTranscriber], ...] = (
+    FasterWhisperTranscriber,
+    MlxWhisperTranscriber,
+)
+"""Every engine this service can run; the API's catalogue must name each one."""
+
+
 def default_transcriber() -> Transcriber:
-    if os.environ.get("WHISPER_BACKEND", "faster-whisper") == "mlx":
-        return MlxWhisperTranscriber()
-    return FasterWhisperTranscriber()
+    backend = os.environ.get("WHISPER_BACKEND", FasterWhisperTranscriber.engine)
+    chosen = next((t for t in TRANSCRIBERS if t.engine == backend), FasterWhisperTranscriber)
+    return chosen()
 
 
 class Utterance:
@@ -257,6 +275,11 @@ def create_app(
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/v1/info")
+    async def info() -> dict[str, list[dict[str, str]]]:
+        transcriber: Transcriber = state["transcriber"]  # type: ignore[assignment]
+        return {"engines": [{"id": transcriber.engine, "model": transcriber.model}]}
 
     @app.get("/health/deep")
     async def deep() -> JSONResponse:

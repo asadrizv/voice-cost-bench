@@ -14,19 +14,23 @@ router = APIRouter()
 
 
 @router.get("/transparency")
-def transparency(
+async def transparency(
     c: Annotated[Container, Depends(container)], s: Annotated[Settings, Depends(settings)]
 ) -> dict[str, Any]:
-    """Public and read-only: every component that touches a call, per pipeline, resolved
-    from the configuration this process runs on. Stable shape (catalogue_version bumps on
-    a breaking change):
+    """Public and read-only: every component that touches a call, per pipeline. Self-hosted
+    STT and TTS are named from what their services report running (asked at most once a
+    minute); everything else from the configuration this process runs on. Stable shape
+    (catalogue_version bumps on a breaking change):
 
         {"catalogue_version": 1, "simulated": bool, "selfhosted_on_local_machine": bool,
          "pipelines": {"api" | "selfhosted": [
             {"kind": "telephony" | "stt" | "llm" | "tts" | "orchestration" | "storage",
              "id": str, "vendor": str, "model": str, "version": str, "region": str,
              "licence": str, "leaves_eu": bool,
-             "assumption": str  # "" when nothing is assumed
+             "assumption": str,  # "" when nothing is assumed
+             "confirmed": bool,  # false: the running engine is unknown, so this is the
+                                 # catalogue's default for the slot
+             "unconfirmed_reason": str  # "" when confirmed
             }, ...  # one per kind, in that order
          ]}}
 
@@ -37,7 +41,14 @@ def transparency(
         "simulated": s.simulate_providers,
         "selfhosted_on_local_machine": s.selfhosted_on_local_machine,
         "pipelines": {
-            kind.value: [component(x) for x in c.catalogue.components(kind)]
+            kind.value: [
+                {
+                    **component(d.component),
+                    "confirmed": d.confirmed,
+                    "unconfirmed_reason": d.unconfirmed_reason,
+                }
+                for d in await c.describe_components.execute(kind)
+            ]
             for kind in PipelineKind
         },
     }

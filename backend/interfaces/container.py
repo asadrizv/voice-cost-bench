@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from backend.application.dto.call_context import CallContext
 from backend.application.ports.audio_output import AudioOutput
 from backend.application.ports.call_repository import CallRepository
-from backend.application.ports.component_catalogue import ComponentCatalogue
+from backend.application.ports.component_catalogue import EngineCatalogue
 from backend.application.ports.endpoint_detector import EndpointDetector
 from backend.application.ports.metrics_sink import MetricsSink
 from backend.application.ports.pipeline_provider import PipelineProvider
@@ -20,6 +20,7 @@ from backend.application.services.endpointing import (
 from backend.application.use_cases.call_session import CallSession, SessionConfig
 from backend.application.use_cases.compare_pipelines import ComparePipelines
 from backend.application.use_cases.compute_call_cost import ComputeCallCost
+from backend.application.use_cases.describe_components import DescribeComponents
 from backend.application.use_cases.end_call import EndCall
 from backend.application.use_cases.handle_call_turn import HandleCallTurn
 from backend.application.use_cases.start_call import StartCall
@@ -30,8 +31,14 @@ from backend.infrastructure.config.personas import YamlPersonaProvider
 from backend.infrastructure.config.settings import Settings
 from backend.infrastructure.persistence.inmemory_call_repository import InMemoryCallRepository
 from backend.infrastructure.persistence.postgres_call_repository import SqlCallRepository
-from backend.infrastructure.pipeline_factory import PipelineFactory, configured_components
+from backend.infrastructure.pipeline_factory import (
+    SELFHOSTED_ENGINES,
+    PipelineFactory,
+    configured_components,
+    service_info_urls,
+)
 from backend.infrastructure.pricing.yaml_rate_card import YamlRateCardProvider
+from backend.infrastructure.running_engines import HttpRunningEngines
 from backend.infrastructure.system_clock import SystemClock
 from backend.infrastructure.vad.energy_vad import EnergyVad
 
@@ -52,7 +59,7 @@ class Container:
     clock: SystemClock
     repository: CallRepository
     rates: YamlRateCardProvider
-    catalogue: ComponentCatalogue
+    catalogue: EngineCatalogue
     calculator: CostCalculator
     personas: YamlPersonaProvider
     pipelines: PipelineProvider
@@ -63,6 +70,7 @@ class Container:
     end_call: EndCall
     compute_cost: ComputeCallCost
     compare: ComparePipelines
+    describe_components: DescribeComponents
 
     def endpointer(self, kind: EndpointerKind | None = None) -> EndpointDetector:
         match kind or self.settings.endpointer:
@@ -100,9 +108,12 @@ def validate_static_config(settings: Settings) -> None:
 
 
 def build_catalogue(settings: Settings, rates: YamlRateCardProvider) -> YamlComponentCatalogue:
-    """Raises ComponentCatalogueError when a configured component has no complete entry."""
+    """Raises ComponentCatalogueError when a configured component, or an engine a self-hosted
+    service can run, has no complete entry."""
     return YamlComponentCatalogue(
-        settings.components_path, configured_components(settings, rates.telephony_provider())
+        settings.components_path,
+        configured_components(settings, rates.telephony_provider()),
+        SELFHOSTED_ENGINES,
     )
 
 
@@ -156,4 +167,10 @@ def build_container(
         end_call=EndCall(repository, metrics, calculator, clock),
         compute_cost=ComputeCallCost(repository, calculator),
         compare=ComparePipelines(repository),
+        describe_components=DescribeComponents(
+            catalogue,
+            None
+            if settings.simulate_providers
+            else HttpRunningEngines(service_info_urls(settings), clock),
+        ),
     )

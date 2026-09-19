@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+import httpx
 import yaml
 
 from backend.application.ports.component_catalogue import ComponentKind
@@ -98,6 +99,14 @@ class PipelineFactory:
         return self._cache[kind]
 
 
+SELFHOSTED_ENGINES: dict[ComponentKind, tuple[str, ...]] = {
+    ComponentKind.STT: ("faster-whisper", "mlx"),
+    ComponentKind.TTS: ("kokoro",),
+}
+"""Every engine gpu/whisper_service and gpu/kokoro_service can run, by the id each reports
+at GET /v1/info. The first is what the service runs by default."""
+
+
 def configured_components(s: Settings, telephony: str) -> Selection:
     """The catalogue entry each pipeline slot uses under these settings, mirroring the
     builders above: a new adapter or engine needs a line here and an entry in
@@ -118,10 +127,21 @@ def configured_components(s: Settings, telephony: str) -> Selection:
         },
         PipelineKind.SELFHOSTED: {
             **shared,
-            ComponentKind.STT: ConfiguredComponent(s.whisper_backend),
+            ComponentKind.STT: ConfiguredComponent(SELFHOSTED_ENGINES[ComponentKind.STT][0]),
             ComponentKind.LLM: _selfhosted_llm(s),
-            ComponentKind.TTS: ConfiguredComponent("kokoro"),
+            ComponentKind.TTS: ConfiguredComponent(SELFHOSTED_ENGINES[ComponentKind.TTS][0]),
         },
+    }
+
+
+def service_info_urls(s: Settings) -> dict[ComponentKind, str]:
+    """GET /v1/info on each self-hosted service, where it reports the engine it runs."""
+    stt = httpx.URL(s.whisper_ws_url)
+    return {
+        ComponentKind.STT: str(
+            stt.copy_with(scheme="https" if stt.scheme == "wss" else "http", path="/v1/info")
+        ),
+        ComponentKind.TTS: f"{s.kokoro_url.rstrip('/')}/v1/info",
     }
 
 

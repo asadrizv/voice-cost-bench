@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -26,15 +26,17 @@ class ConfiguredComponent:
 
 
 Selection = Mapping[PipelineKind, Mapping[ComponentKind, ConfiguredComponent]]
+Engines = Mapping[ComponentKind, Collection[str]]
 
 _REQUIRED = ("vendor", "model", "version", "region", "licence")
 
 
 class YamlComponentCatalogue:
-    """Reads config/components.yaml once and resolves it against the configured selection,
-    so a configured component with no entry, or an incomplete entry, fails at startup."""
+    """Reads config/components.yaml once and resolves it against the configured selection
+    and every engine the self-hosted services can run, so any of those with no entry, or an
+    incomplete entry, fails at startup."""
 
-    def __init__(self, path: Path, selection: Selection) -> None:
+    def __init__(self, path: Path, selection: Selection, engines: Engines) -> None:
         raw = yaml.safe_load(path.read_text())
         self._version = int(raw["version"])
         hosts: dict[str, Any] = raw.get("hosts", {})
@@ -45,12 +47,24 @@ class YamlComponentCatalogue:
             ]
             for pipeline, slots in selection.items()
         }
+        self._engines = {
+            kind: {
+                engine_id: _resolve(
+                    PipelineKind.SELFHOSTED, kind, ConfiguredComponent(engine_id), entries, hosts
+                )
+                for engine_id in ids
+            }
+            for kind, ids in engines.items()
+        }
 
     def version(self) -> int:
         return self._version
 
     def components(self, kind: PipelineKind) -> list[Component]:
         return list(self._components[kind])
+
+    def engine(self, kind: ComponentKind, engine_id: str) -> Component | None:
+        return self._engines.get(kind, {}).get(engine_id)
 
 
 def _resolve(

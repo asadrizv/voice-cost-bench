@@ -7,6 +7,7 @@ from pathlib import Path
 
 import httpx
 import jwt
+import numpy as np
 import pytest
 
 from backend.application.ports.pipeline_provider import Pipeline
@@ -17,7 +18,9 @@ from backend.infrastructure.config.component_catalogue import ComponentCatalogue
 from backend.infrastructure.config.settings import Settings
 from backend.interfaces.container import validate_static_config
 from backend.interfaces.http.app import create_app
+from gpu.whisper_service.app import create_app as whisper_app
 from tests.fakes import FakeClock, FakeLlm, FakeTts, RecordingOutput, ScriptedStt, StaticPipelines
+from tests.integration.servers import run_asgi
 
 SETTINGS = Settings(
     database_url="",
@@ -25,6 +28,9 @@ SETTINGS = Settings(
     livekit_api_secret="lk-secret-that-is-long-enough-for-hs256",
     livekit_url="wss://example.livekit.cloud",
     internal_token="internal-test",
+    # Nothing listens on port 9, so no test asks whichever GPU services this machine runs.
+    whisper_ws_url="ws://127.0.0.1:9/v1/stream",
+    kokoro_url="http://127.0.0.1:9",
 )
 
 
@@ -197,6 +203,8 @@ COMPONENT_FIELDS = {
     "licence",
     "leaves_eu",
     "assumption",
+    "confirmed",
+    "unconfirmed_reason",
 }
 KINDS = ["telephony", "stt", "llm", "tts", "orchestration", "storage"]
 
@@ -211,7 +219,11 @@ async def test_transparency_lists_every_component_of_both_pipelines(api) -> None
         assert [c["kind"] for c in components] == KINDS
         for c in components:
             assert set(c) == COMPONENT_FIELDS
-            assert all(c[f] for f in COMPONENT_FIELDS - {"leaves_eu", "assumption"})
+            assert all(
+                c[f]
+                for f in COMPONENT_FIELDS
+                - {"leaves_eu", "assumption", "confirmed", "unconfirmed_reason"}
+            )
             assert isinstance(c["leaves_eu"], bool)
 
     api_stack = {c["kind"]: c for c in body["pipelines"]["api"]}
@@ -268,7 +280,6 @@ async def test_transparency_follows_the_catalogue_and_the_running_configuration(
             "deepgram_model": "nova-3-medical",
             "llm_server": "ollama",
             "vllm_model": "qwen3.5:9b",
-            "whisper_backend": "mlx",
             "livekit_url": "ws://localhost:7880",
         }
     )
@@ -279,16 +290,36 @@ async def test_transparency_follows_the_catalogue_and_the_running_configuration(
     assert stacks["api"]["stt"]["model"] == "nova-3-medical"
     assert stacks["selfhosted"]["llm"]["id"] == "ollama:qwen3.5:9b"
     assert stacks["selfhosted"]["llm"]["model"] == "qwen3.5:9b"
-    assert stacks["selfhosted"]["stt"]["model"] == "mlx-community/whisper-large-v3-turbo"
     assert stacks["api"]["orchestration"]["id"] == "livekit-server"
     assert stacks["api"]["orchestration"]["leaves_eu"] is False
+
+
+class IdentifiedTranscriber:
+    def __init__(self, engine: str, model: str) -> None:
+        self.engine, self.model = engine, model
+
+    def transcribe(self, audio: np.ndarray, language: str) -> str:
+        return ""
+
+
+async def test_transparency_names_the_stt_engine_the_whisper_service_runs() -> None:
+    transcriber = IdentifiedTranscriber("mlx", "mlx-community/whisper-large-v3-turbo")
+    async with run_asgi(whisper_app(lambda: transcriber, workers=1)) as host:
+        stacks = await transparency_of(
+            SETTINGS.model_copy(update={"whisper_ws_url": f"ws://{host}/v1/stream"})
+        )
+
+    stt = stacks["selfhosted"]["stt"]
+    assert (stt["id"], stt["vendor"]) == ("mlx", "MLX Whisper (OpenAI Whisper weights)")
+    assert stt["model"] == "mlx-community/whisper-large-v3-turbo"
+    assert (stt["confirmed"], stt["unconfirmed_reason"]) == (True, "")
 
 
 @pytest.mark.parametrize(
     ("update", "edit", "named"),
     [
         ({"llm_server": "ollama", "vllm_model": "llama3.2"}, None, "'ollama:llama3.2'"),
-        ({"whisper_backend": "voxtral"}, None, "'voxtral'"),
+        ({}, ("  mlx:\n    kind: stt", "  mlx-old:\n    kind: stt"), "'mlx'"),
         (
             {"database_url": "postgresql://x/y"},
             ("  postgres:\n", "  postgres-old:\n"),

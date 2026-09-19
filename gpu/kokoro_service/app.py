@@ -3,6 +3,8 @@
 POST /v1/synthesize {"text": str, "voice": str, "speed": float}
   -> 200, body streams raw PCM16 LE, 24 kHz, mono, one segment at a time.
 
+GET /v1/info -> {"engines": [{"id": str, "model": str}]}, every engine synthesis can route to.
+
 Kokoro doesn't batch across requests, so synthesis runs on a bounded pool; beyond it
 requests queue here, visibly (kokoro_waiting), instead of inside the GPU.
 """
@@ -30,12 +32,19 @@ SAMPLE_RATE = 24_000
 
 
 class Synthesizer(Protocol):
+    engine: str
+    """The engine's id in config/components.yaml, where /transparency names it from."""
+    model: str
+
     def synthesize(self, text: str, voice: str, speed: float) -> Iterator[np.ndarray]:
         """Yields float32 mono 24 kHz segments."""
         ...
 
 
 class KokoroSynthesizer:
+    engine = "kokoro"
+    model = "hexgrad/Kokoro-82M"
+
     def __init__(self) -> None:
         from kokoro import KPipeline
 
@@ -48,7 +57,9 @@ class KokoroSynthesizer:
         with self._lock:
             if lang_code not in self._pipelines:
                 self._pipelines[lang_code] = self._factory(
-                    lang_code=lang_code, device=os.environ.get("KOKORO_DEVICE") or None
+                    lang_code=lang_code,
+                    repo_id=self.model,
+                    device=os.environ.get("KOKORO_DEVICE") or None,
                 )
             return self._pipelines[lang_code]
 
@@ -57,6 +68,10 @@ class KokoroSynthesizer:
         pipeline = self._pipeline(voice[0])
         for _, _, audio in pipeline(text, voice=voice, speed=speed):  # type: ignore[operator]
             yield np.asarray(audio, dtype=np.float32)
+
+
+SYNTHESIZERS: tuple[type[KokoroSynthesizer], ...] = (KokoroSynthesizer,)
+"""Every engine this service can run; the API's catalogue must name each one."""
 
 
 class SynthesizeRequest(BaseModel):
@@ -157,6 +172,11 @@ def create_app(
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/v1/info")
+    async def info() -> dict[str, list[dict[str, str]]]:
+        synth: Synthesizer = state["synth"]  # type: ignore[assignment]
+        return {"engines": [{"id": synth.engine, "model": synth.model}]}
 
     @app.get("/health/deep")
     async def deep() -> JSONResponse:
