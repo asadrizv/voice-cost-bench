@@ -119,6 +119,17 @@ components:
     version: kokoro>=0.9.4
     host: gpu_host
     licence: Apache-2.0
+  qwen3-tts:
+    kind: tts
+    vendor: Alibaba Cloud Qwen
+    model: Qwen3-TTS-12Hz-1.7B-VoiceDesign
+    version: mlx-audio>=0.5.4
+    host: gpu_host
+    licence: Apache-2.0
+    assumption: >-
+      The German voice is a written description, not a cloned recording. model and version
+      are the Apple Silicon path; QWEN3_TTS_MODEL names the quantisation actually loaded
+      and the TTS service reports it at /v1/info.
 
   livekit-server:
     kind: orchestration

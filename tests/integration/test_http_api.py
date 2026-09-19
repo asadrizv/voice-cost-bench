@@ -280,7 +280,7 @@ async def test_transparency_follows_the_catalogue_and_the_running_configuration(
     catalogue = config / "components.yaml"
     catalogue.write_text(
         catalogue.read_text().replace(
-            "licence: Apache-2.0\n\n  livekit-server", "licence: X\n\n  livekit-server"
+            "licence: Apache-2.0\n  qwen3-tts:", "licence: X\n  qwen3-tts:"
         )
     )
     settings = SETTINGS.model_copy(
@@ -342,13 +342,17 @@ async def test_a_service_running_an_engine_without_a_catalogue_entry_is_unconfir
 
 class KokoroStub:
     engine, model = KokoroSynthesizer.engine, KokoroSynthesizer.model
+    warmup_voice = KokoroSynthesizer.warmup_voice
+
+    def speaks(self, voice: str) -> bool:
+        return True
 
     def synthesize(self, text: str, voice: str, speed: float) -> Iterator[np.ndarray]:
         yield np.zeros(240, np.float32)
 
 
 async def test_transparency_confirms_the_tts_engine_the_kokoro_service_runs() -> None:
-    async with run_asgi(kokoro_app(KokoroStub, workers=1)) as host:
+    async with run_asgi(kokoro_app((KokoroStub,), workers=1)) as host:
         stacks = await transparency_of(SETTINGS.model_copy(update={"kokoro_url": f"http://{host}"}))
 
     tts = stacks["selfhosted"]["tts"]
@@ -471,7 +475,12 @@ async def test_an_unreachable_service_leaves_its_default_listed_but_unconfirmed(
             ("  postgres:\n", "  postgres-old:\n"),
             "'postgres'",
         ),
-        ({}, ("licence: Apache-2.0\n\n  livekit", "\n\n  livekit"), "'kokoro': needs licence"),
+        (
+            {},
+            ("    licence: Apache-2.0\n  qwen3-tts:", "  qwen3-tts:"),
+            "'kokoro': needs licence",
+        ),
+        ({}, ("  qwen3-tts:\n    kind: tts", "  qwen3-tts-old:\n    kind: tts"), "'qwen3-tts'"),
         ({}, ("vendor: Deepgram\n", "vendor: Deepgram\n    model: nova-2\n"), "model comes"),
         ({}, ("host: gpu_host\n    licence: Apache", "host: mars\n    licence: Apache"), "'mars'"),
         (
