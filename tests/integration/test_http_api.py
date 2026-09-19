@@ -205,6 +205,7 @@ async def test_transparency_lists_every_component_of_both_pipelines(api) -> None
     client, _ = api
     body = (await client.get("/transparency")).json()
 
+    assert body["catalogue_version"] == 1
     assert set(body["pipelines"]) == {"api", "selfhosted"}
     for components in body["pipelines"].values():
         assert [c["kind"] for c in components] == KINDS
@@ -218,12 +219,21 @@ async def test_transparency_lists_every_component_of_both_pipelines(api) -> None
     assert (api_stack["llm"]["vendor"], api_stack["llm"]["model"]) == ("OpenAI", "gpt-4o-mini")
     assert api_stack["tts"]["model"] == "eleven_flash_v2_5"
     assert api_stack["tts"]["licence"] == "proprietary" and api_stack["tts"]["leaves_eu"]
+    assert api_stack["stt"]["region"] == "us"
+    assert api_stack["stt"]["assumption"] == (
+        "Deepgram's default US endpoint; no EU endpoint is configured."
+    )
 
     selfhosted = {c["kind"]: c for c in body["pipelines"]["selfhosted"]}
     assert selfhosted["llm"]["model"] == "Qwen/Qwen3.5-9B"
     assert selfhosted["llm"]["version"] == "c202236235762e1c871ad0ccb60c8ee5ba337b9a"
     assert selfhosted["stt"]["id"] == "faster-whisper" and selfhosted["stt"]["licence"] == "MIT"
     assert selfhosted["tts"]["licence"] == "Apache-2.0" and not selfhosted["tts"]["leaves_eu"]
+    assert selfhosted["tts"]["region"] == "gpu-host (see deployment)"
+    assert selfhosted["tts"]["assumption"].startswith("Runs wherever the GPU runs.")
+    assert selfhosted["stt"]["assumption"].startswith(
+        "model is whisper_service's default; WHISPER_MODEL on the GPU host overrides it. Runs"
+    )
     assert selfhosted["orchestration"]["id"] == "livekit-cloud"
     assert selfhosted["storage"]["id"] == "in-memory"
 
@@ -293,7 +303,7 @@ async def test_transparency_follows_the_catalogue_and_the_running_configuration(
                 "leaves_eu: true\n    assumption: Deepgram",
                 "assumption: Deepgram",
             ),
-            "leaves_eu",
+            "needs leaves_eu",
         ),
         ({}, ("  kokoro:\n    kind: tts", "  kokoro:\n    kind: stt"), "kind 'stt'"),
     ],

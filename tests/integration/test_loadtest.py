@@ -117,15 +117,23 @@ class OneStackCatalogue:
 
 
 @pytest.mark.parametrize(
-    ("pipeline", "kind"),
+    ("pipeline", "kind", "model_facts"),
     [
-        ("api", PipelineKind.API),
-        ("selfhosted", PipelineKind.SELFHOSTED),
-        ("simulated", PipelineKind.SELFHOSTED),
+        ("api", PipelineKind.API, {"listed_in_rate_card"}),
+        (
+            "selfhosted",
+            PipelineKind.SELFHOSTED,
+            {"vllm_version", "serving_config", "serving_config_sha256"},
+        ),
+        (
+            "simulated",
+            PipelineKind.SELFHOSTED,
+            {"vllm_version", "serving_config", "serving_config_sha256"},
+        ),
     ],
 )
 def test_provenance_names_the_components_from_the_catalogue(
-    pipeline: str, kind: PipelineKind
+    pipeline: str, kind: PipelineKind, model_facts: set[str]
 ) -> None:
     stt = Component(ComponentKind.STT, "acme", "Acme", "ears-2", "r9", "eu-west", "MIT", False, "")
     conversation = Conversation("intake_en", "law_firm", "en", ["Hello."], [[]])
@@ -137,7 +145,7 @@ def test_provenance_names_the_components_from_the_catalogue(
         conversation,
         EndpointerKind.SEMANTIC,
         simulated=True,
-        rates_raw={},
+        rates_raw={"api": {"stt": {"model": "ears-2"}}},
         catalogue=OneStackCatalogue(kind, [stt]),
     )
 
@@ -155,4 +163,5 @@ def test_provenance_names_the_components_from_the_catalogue(
             "assumption": "",
         }
     ]
+    assert set(info["models"]) == model_facts
     assert "whisper" not in str(info["models"]) and "deepgram" not in str(info["models"])
