@@ -19,3 +19,4 @@ frontend/tsconfig.tsbuildinfo
 fixtures/audio/
 frontend/e2e/*.wav
 mutants/
+coverage.xml
