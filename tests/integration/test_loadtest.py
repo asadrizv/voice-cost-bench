@@ -17,7 +17,7 @@ from backend.application.services.endpointing import EndpointerKind
 from backend.application.use_cases.describe_components import DescribedComponent
 from backend.domain.value_objects.audio import PCM16_24K_MONO, AudioChunk
 from backend.domain.value_objects.pipeline_kind import PipelineKind
-from backend.infrastructure.config.settings import Settings
+from backend.infrastructure.config.settings import MissingServingConfig, Settings
 from backend.infrastructure.persistence.inmemory_call_repository import InMemoryCallRepository
 from backend.infrastructure.simulated.gpu_model import SimulatedGpu, SimulatedGpuProfile
 from backend.infrastructure.transport.paced_output import PacedAudioOutput
@@ -367,6 +367,24 @@ def test_provenance_records_what_ran_and_whether_it_was_confirmed(
     ]
     assert set(info["models"]) == model_facts
     assert "whisper" not in str(info["models"]) and "deepgram" not in str(info["models"])
+
+
+def test_provenance_refuses_to_record_a_serving_config_that_does_not_exist() -> None:
+    """A benchmark whose provenance says "missing" can't be reproduced or challenged."""
+    conversation = Conversation("intake_en", "law_firm", "en", ["Hello."], [[]])
+    settings = Settings(database_url="", serving_config="serving/qwen-9b-l40s.yaml")
+
+    with pytest.raises(MissingServingConfig, match="serving/qwen-9b-l40s.yaml"):
+        provenance.collect(
+            settings,
+            "selfhosted",
+            conversation,
+            EndpointerKind.SEMANTIC,
+            simulated=True,
+            rates_raw={},
+            components=[],
+            catalogue_version=7,
+        )
 
 
 async def test_the_caller_waits_for_an_answer_when_a_pause_splits_its_turn() -> None:

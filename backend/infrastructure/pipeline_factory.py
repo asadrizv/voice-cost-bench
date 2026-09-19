@@ -148,6 +148,6 @@ def service_info_urls(s: Settings) -> dict[ComponentKind, str]:
 def _selfhosted_llm(s: Settings) -> ConfiguredComponent:
     if s.llm_server == "ollama":
         return ConfiguredComponent(f"ollama:{s.vllm_model}", model=s.vllm_model)
-    serving = yaml.safe_load((s.config_dir / s.serving_config).read_text())
+    serving = yaml.safe_load(s.serving_config_path.read_text())
     model = str(serving["model"])
     return ConfiguredComponent(f"vllm:{model}", model=model, version=str(serving["revision"]))

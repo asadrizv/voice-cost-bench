@@ -50,7 +50,6 @@ def collect(
     catalogue_version: int,
 ) -> dict[str, Any]:
     """Everything needed to reproduce or challenge a number, written with the number."""
-    serving_path = settings.config_dir / settings.serving_config
     gpu = detect_gpu_telemetry().snapshot()
     info: dict[str, Any] = {
         "generated_at": datetime.now(UTC).isoformat(),
@@ -99,6 +98,6 @@ def collect(
         info["models"] = {
             "vllm_version": None if simulated else _probe(f"{vllm_root}/version"),
             "serving_config": settings.serving_config,
-            "serving_config_sha256": _sha256(serving_path),
+            "serving_config_sha256": _sha256(settings.serving_config_path),
         }
     return info
