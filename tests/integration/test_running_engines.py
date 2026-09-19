@@ -5,6 +5,8 @@ import pytest
 
 from backend.application.ports.component_catalogue import ComponentKind
 from backend.application.ports.running_engines import Engine, EngineReportUnavailable
+from backend.infrastructure.config.settings import Settings
+from backend.infrastructure.pipeline_factory import service_info_urls
 from backend.infrastructure.running_engines import HttpRunningEngines
 from tests.fakes import FakeClock
 
@@ -68,3 +70,28 @@ async def test_a_failed_report_is_unavailable_and_remembered_for_a_minute(
         Engine("mlx", "mlx-community/whisper-large-v3-turbo")
     ]
     assert len(asked) == 2
+
+
+@pytest.mark.parametrize(
+    ("whisper_ws_url", "kokoro_url", "stt_info", "tts_info"),
+    [
+        (
+            "ws://gpu:8001/v1/stream",
+            "http://gpu:8002",
+            "http://gpu:8001/v1/info",
+            "http://gpu:8002/v1/info",
+        ),
+        (
+            "wss://gpu.example/v1/stream",
+            "https://gpu.example/tts/",
+            "https://gpu.example/v1/info",
+            "https://gpu.example/tts/v1/info",
+        ),
+    ],
+)
+def test_each_service_is_asked_at_its_info_endpoint(
+    whisper_ws_url: str, kokoro_url: str, stt_info: str, tts_info: str
+) -> None:
+    settings = Settings(database_url="", whisper_ws_url=whisper_ws_url, kokoro_url=kokoro_url)
+
+    assert service_info_urls(settings) == {ComponentKind.STT: stt_info, ComponentKind.TTS: tts_info}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import shutil
 from collections.abc import AsyncIterator, Iterator
@@ -379,6 +380,27 @@ async def test_a_service_not_reporting_exactly_one_engine_leaves_its_default_unc
         f"the tts service reports engines {named}, and this lists one per kind; "
         "listed from the catalogue's default"
     )
+
+
+async def test_a_hung_service_leaves_its_default_unconfirmed_within_seconds() -> None:
+    info, release = FastAPI(), asyncio.Event()
+
+    @info.get("/v1/info")
+    async def hang() -> None:
+        await release.wait()
+
+    async with run_asgi(info) as host:
+        try:
+            stacks = await asyncio.wait_for(
+                transparency_of(SETTINGS.model_copy(update={"kokoro_url": f"http://{host}"})),
+                2.5,
+            )
+        finally:
+            release.set()
+
+    tts = stacks["selfhosted"]["tts"]
+    assert (tts["id"], tts["confirmed"]) == ("kokoro", False)
+    assert "(ReadTimeout)" in tts["unconfirmed_reason"]
 
 
 def test_startup_checks_the_catalogue_for_every_engine_the_services_can_run() -> None:
