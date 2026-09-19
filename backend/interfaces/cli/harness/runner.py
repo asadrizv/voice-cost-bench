@@ -34,6 +34,8 @@ class LevelRun:
     rejected: int = 0
     reply_timeouts: int = 0
     lateness_ms: list[float] = field(default_factory=list)
+    caller_observed_ms: list[float] = field(default_factory=list)
+    unanswered_turns: int = 0
     wall_s: float = 0.0
 
 
@@ -94,6 +96,8 @@ class LevelRunner:
             try:
                 call = await session.run(caller.frames())
                 result.calls.append(call)
+                result.caller_observed_ms.extend(output.caller_observed_ms)
+                result.unanswered_turns += output.unanswered_turns
             except Exception:
                 log.exception("call %s failed", ctx.call.id)
                 result.failed += 1

@@ -10,6 +10,7 @@ import yaml
 
 from backend.application.use_cases.call_session import CallSession
 from backend.domain.value_objects.audio import PCM16_16K_MONO, AudioChunk
+from backend.infrastructure.audio.level import first_audible_s
 from backend.infrastructure.audio.wav import frames, read_wav
 from backend.infrastructure.transport.paced_output import PacedAudioOutput
 
@@ -88,8 +89,14 @@ class SyntheticCaller:
         async for chunk in self._await_reply(expected_turns=1):
             yield chunk
         for index, utterance in enumerate(self._conv.audio):
-            for chunk in utterance:
+            self._output.caller_speech_started()
+            last_voiced = _last_audible_frame(utterance)
+            for position, chunk in enumerate(utterance):
                 await self.pacer.tick()
+                if position == last_voiced:
+                    # Stamped as the frame is handed over: CallSession reads its clock for
+                    # this frame before anything else can run, so both sides agree.
+                    self._output.caller_speech_ended()
                 yield chunk
             async for chunk in self._await_reply(expected_turns=index + 2):
                 yield chunk
@@ -106,3 +113,8 @@ class SyntheticCaller:
             if time.monotonic() > deadline:
                 self.timeouts += 1
                 return
+
+
+def _last_audible_frame(utterance: list[AudioChunk]) -> int | None:
+    audible = [i for i, chunk in enumerate(utterance) if first_audible_s(chunk) is not None]
+    return audible[-1] if audible else None

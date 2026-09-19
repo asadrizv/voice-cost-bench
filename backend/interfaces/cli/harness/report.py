@@ -66,6 +66,7 @@ def summarise_level(
     budget = LatencyAnalyzer().budget(samples)
     minutes = seconds / 60
     lateness_p95 = percentile(run.lateness_ms, 95) if run.lateness_ms else 0.0
+    observed = run.caller_observed_ms
     per_minute = {k: (v * 60 / seconds if seconds else 0.0) for k, v in cost.as_dict().items()}
     # Telephony cost is linear in telephony seconds, so each carrier swaps only that line.
     without_telephony = per_minute["total"] - per_minute["telephony"]
@@ -95,6 +96,12 @@ def summarise_level(
         },
         "end_to_end_p95_ms": round(budget.end_to_end_p95, 1),
         "perceived_delay_p95_ms": round(budget.perceived_delay_p95, 1),
+        **{
+            f"caller_observed_p{pct}_ms": round(percentile(observed, pct), 1) if observed else None
+            for pct in (50, 95, 99)
+        },
+        "caller_observed_turns": len(observed),
+        "caller_observed_unanswered": run.unanswered_turns,
         "within_budget": budget.ok,
         "stt_wer": round(sum(wers) / len(wers), 4) if wers and not simulated else None,
         "harness_lateness_p95_ms": round(lateness_p95, 1),

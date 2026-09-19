@@ -7,6 +7,7 @@ from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from backend.application.ports.component_catalogue import Component, ComponentKind
@@ -14,16 +15,18 @@ from backend.application.ports.rate_card_provider import TelephonyQuote
 from backend.application.services.concurrency_supervisor import ConcurrencySupervisor
 from backend.application.services.endpointing import EndpointerKind
 from backend.application.use_cases.describe_components import DescribedComponent
+from backend.domain.value_objects.audio import PCM16_24K_MONO, AudioChunk
 from backend.domain.value_objects.pipeline_kind import PipelineKind
 from backend.infrastructure.config.settings import Settings
 from backend.infrastructure.persistence.inmemory_call_repository import InMemoryCallRepository
 from backend.infrastructure.simulated.gpu_model import SimulatedGpu, SimulatedGpuProfile
+from backend.infrastructure.transport.paced_output import PacedAudioOutput
 from backend.interfaces.cli import loadtest
 from backend.interfaces.cli.harness import provenance, report
 from backend.interfaces.cli.harness.caller import Conversation, load_conversation
 from backend.interfaces.cli.harness.runner import LevelRun, LevelRunner
 from backend.interfaces.container import build_container
-from tests.fakes import NullMetrics
+from tests.fakes import FakeClock, NullMetrics
 
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
 needs_audio = pytest.mark.skipif(
@@ -66,6 +69,17 @@ async def test_level_run_produces_costed_timed_calls() -> None:
     assert summary["perceived_delay_p95_ms"] > summary["end_to_end_p95_ms"] > 0
     assert summary["harness_valid"]
 
+    # One utterance per call, so each call's single caller-observed delay pairs with its
+    # one answered turn. Caller-observed can't exceed internal perceived delay here: the
+    # simulated TTS opens with audible tone, so both end at the same agent audio, and the
+    # fixture's speech end is never earlier than the endpointer's (see AUDIBLE_DBFS).
+    assert run.unanswered_turns == 0
+    for call, observed in zip(run.calls, run.caller_observed_ms, strict=True):
+        assert 0 < observed <= call.latencies()[0].perceived_delay + 1
+    assert summary["caller_observed_turns"] == 3
+    assert summary["caller_observed_unanswered"] == 0
+    assert 0 < summary["caller_observed_p95_ms"] <= summary["perceived_delay_p95_ms"] + 1
+
     curve = report.utilisation_curve(
         [summary], container.calculator.rate_card, [{"provider": "scaleway", "hourly_usd": 1.40}]
     )
@@ -107,6 +121,107 @@ async def test_each_priced_carrier_gets_a_cost_row_differing_only_in_telephony()
     )
 
 
+def _tone_utterance(speech_s: float, pause_s: float) -> list[AudioChunk]:
+    tone = (3000 * np.sin(2 * np.pi * 440 * np.arange(320) / 16_000)).astype("<i2").tobytes()
+    frames = int(speech_s / 0.02) * [AudioChunk(tone)]
+    return frames + int(pause_s / 0.02) * [AudioChunk(bytes(640))]
+
+
+async def test_caller_observed_delay_matches_a_pipeline_of_known_latency() -> None:
+    conversation = Conversation(
+        "tones",
+        "law_firm",
+        "en",
+        ["My name is Anna Weber.", "It's a tenancy issue."],
+        [_tone_utterance(1.0, 0.2), _tone_utterance(0.6, 0.2)],
+    )
+    container = build_container(
+        Settings(database_url=""),
+        NullMetrics(),  # type: ignore[arg-type]
+        repository=InMemoryCallRepository(),
+    )
+    after_commit_ms = 300 + 100  # LLM first token + TTS first byte; STT and decode free
+    gpu = SimulatedGpu(
+        SimulatedGpuProfile(
+            stt_final_ms=0,
+            llm_ttft_ms=300,
+            llm_ttft_per_active_ms=0,
+            llm_tokens_per_s=1e6,
+            tts_first_byte_ms=100,
+            speech_s_per_char=0.002,
+            jitter=0,
+        )
+    )
+    runner = LevelRunner(
+        container, PipelineKind.SELFHOSTED, conversation, EndpointerKind.SILENCE, gpu
+    )
+
+    run = await runner.run(concurrency=1, duration_s=0.1)
+
+    assert run.failed == 0 and run.unanswered_turns == 0
+    [call] = run.calls
+    answered = call.latencies()
+    assert len(run.caller_observed_ms) == len(answered) == 2
+    for observed, latency in zip(run.caller_observed_ms, answered, strict=True):
+        # The 700 ms silence endpointer notices on a frame boundary, so its wait is read
+        # from the turn; everything after the commit is fixed by the profile.
+        assert 700 <= latency.endpoint_detected <= 700 + 20 + 5
+        assert observed == pytest.approx(latency.endpoint_detected + after_commit_ms, abs=20)
+
+
+def _agent_audio(*parts: tuple[float, float]) -> AudioChunk:
+    """Concatenated (seconds, dBFS) sections of a 440 Hz tone at 24 kHz, as TTS emits."""
+    pcm = []
+    for seconds, dbfs in parts:
+        t = np.arange(int(24_000 * seconds)) / 24_000
+        amplitude = 32767 * np.sqrt(2) * 10 ** (dbfs / 20)  # sine RMS = peak / sqrt(2)
+        pcm.append((amplitude * np.sin(2 * np.pi * 440 * t)).astype("<i2"))
+    return AudioChunk(np.concatenate(pcm).tobytes(), PCM16_24K_MONO)
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        [_agent_audio((0.2, -60)), _agent_audio((0.04, -20))],
+        [_agent_audio((0.2, -60), (0.04, -20))],
+    ],
+    ids=["separate chunks", "one chunk"],
+)
+async def test_near_silent_tts_lead_in_is_not_the_agent_speaking(chunks: list[AudioChunk]) -> None:
+    clock = FakeClock()
+    output = PacedAudioOutput(clock)
+    output.caller_speech_started()
+    output.caller_speech_ended()
+    clock.advance(0.5)
+
+    for chunk in chunks:
+        await output.write(chunk)
+
+    assert output.caller_observed_ms == [pytest.approx(700)]
+    assert output.unanswered_turns == 0
+
+
+async def test_a_turn_the_agent_never_answers_is_counted_unanswered_not_timed() -> None:
+    clock = FakeClock()
+    output = PacedAudioOutput(clock)
+    await output.write(_agent_audio((0.5, -20)))  # the greeting answers no caller turn
+    clock.advance(1.0)
+    output.caller_speech_started()
+    output.caller_speech_ended()
+    clock.advance(2.0)
+    output.caller_speech_started()  # spoke again with no answer: the first turn is lost
+    output.caller_speech_ended()
+    clock.advance(0.3)
+    await output.write(_agent_audio((0.5, -20)))
+    await output.write(_agent_audio((0.5, -20)))
+    clock.advance(1.0)
+    output.caller_speech_started()
+    output.caller_speech_ended()  # then hung up on
+
+    assert output.caller_observed_ms == [pytest.approx(300)]
+    assert output.unanswered_turns == 2
+
+
 def test_a_level_where_every_call_failed_costs_nothing_under_any_carrier() -> None:
     conversation = Conversation("intake_en", "law_firm", "en", ["Hello."], [[]])
     twilio = TelephonyQuote("twilio", Decimal("0.014"), "https://x", "2026-09-17", True, True)
@@ -114,6 +229,23 @@ def test_a_level_where_every_call_failed_costs_nothing_under_any_carrier() -> No
     summary = report.summarise_level(LevelRun(2, 1.0, failed=2), conversation, True, [twilio])
 
     assert summary["cost_per_minute_by_carrier_usd"] == {"twilio": 0.0}
+    assert summary["caller_observed_p50_ms"] is None
+    assert summary["caller_observed_p99_ms"] is None
+    assert summary["caller_observed_turns"] == 0
+
+
+def test_caller_observed_percentiles_summarise_every_timed_turn() -> None:
+    conversation = Conversation("intake_en", "law_firm", "en", ["Hello."], [[]])
+    delays = [float(v) for v in range(100, 1100, 10)]
+    run = LevelRun(1, 1.0, caller_observed_ms=delays, unanswered_turns=4)
+
+    summary = report.summarise_level(run, conversation, simulated=True)
+
+    assert summary["caller_observed_p50_ms"] == 595.0
+    assert summary["caller_observed_p95_ms"] == 1040.5
+    assert summary["caller_observed_p99_ms"] == 1080.1
+    assert summary["caller_observed_turns"] == 100
+    assert summary["caller_observed_unanswered"] == 4
 
 
 def test_breaking_point_is_first_level_over_budget() -> None:
