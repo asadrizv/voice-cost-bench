@@ -65,3 +65,30 @@ def test_the_browser_offers_every_endpointer_the_backend_knows() -> None:
     listed = re.search(r"export const ENDPOINTERS = \{(.*?)\} as const;", api_ts, re.S)
     assert listed is not None
     assert set(re.findall(r"(\w+):", listed.group(1))) == {kind.value for kind in EndpointerKind}
+
+
+def test_selecting_smart_turn_does_not_load_the_model_on_the_calling_thread() -> None:
+    """The agent builds the detector on its audio loop: loading there blocked the loop for
+    147 ms on the first call (livekit's watchdog), and would block for the whole download
+    on a cold host. The load belongs on the pool thread that runs inference."""
+    from backend.infrastructure.endpointing import smart_turn
+
+    loads: list[str] = []
+    original = smart_turn.load_model
+
+    def record(*args: object, **kwargs: object) -> object:
+        loads.append("loaded")
+        return original(*args, **kwargs)  # type: ignore[arg-type]
+
+    smart_turn.load_model = record  # type: ignore[assignment]
+    try:
+        container = build_container(
+            Settings(database_url="", endpointer=EndpointerKind.SMART_TURN),
+            NullMetrics(),  # type: ignore[arg-type]
+        )
+        detector = container.endpointer()
+    finally:
+        smart_turn.load_model = original  # type: ignore[assignment]
+
+    assert detector is not None
+    assert loads == []

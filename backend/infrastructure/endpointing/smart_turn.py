@@ -74,6 +74,13 @@ def load_model(offline: bool = False) -> SmartTurnModel:
     return SmartTurnModel(path)
 
 
+def probability(audio: bytes) -> float:
+    """Loads the model on first use, on whichever thread runs the decision. Loading it
+    where the detector is built would stall the agent's audio loop (147 ms measured for
+    the import alone, plus the download on a host that has no cache yet)."""
+    return load_model().probability(audio)
+
+
 @functools.cache
 def pool() -> Executor:
     """Where decisions run so the audio loop keeps reading frames while the model thinks.

@@ -88,7 +88,7 @@ class Container:
                 from backend.infrastructure.endpointing import smart_turn
 
                 return SmartTurnEndpointDetector(
-                    self.turn_model or smart_turn.load_model(), executor=smart_turn.pool()
+                    self.turn_model or smart_turn.probability, executor=smart_turn.pool()
                 )
 
     def session(
