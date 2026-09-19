@@ -149,7 +149,7 @@ async def _wer(args: argparse.Namespace) -> dict[str, Any]:
     return await run_wer(get_settings(), FIXTURES, args.pipeline, args.language, args.limit)
 
 
-def main(argv: list[str] | None = None) -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="loadtest", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -188,7 +188,11 @@ def main(argv: list[str] | None = None) -> None:
     wer.add_argument("--limit", type=int)
     wer.add_argument("--out", type=Path)
 
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", stream=sys.stderr)
 
     if args.command == "wer":

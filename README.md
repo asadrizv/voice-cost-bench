@@ -107,9 +107,12 @@ Clean architecture: `domain` (pure) ← `application` (ports, use cases) ← `in
   above the ceiling and is the only source of the GPU cost divisor. Each call accrues
   1/n of every second, so shares always sum to the busy time. The agent runs jobs as
   threads so all calls share one supervisor.
-- **Endpointing** is a port with two implementations: fixed silence (baseline) and
+- **Endpointing** is a port with three implementations: fixed silence (baseline);
   semantic, which waits 250 ms after a finished sentence and up to 1.5 s after a dangling
-  "and my…".
+  "and my…"; and Smart Turn v3.2, an 8 MB audio model (BSD-2) that scores the caller's
+  last 8 seconds after a 200 ms pause and holds to the same 1.5 s ceiling when it says the
+  turn is unfinished. Its weights download on first use and its per-decision inference
+  time is reported by the harness.
 - **Prices** live only in `config/rates.yaml`. Sampling parameters and the no-thinking
   switch live in the persona. vLLM flags live in `config/serving/<model>-<gpu>.yaml`.
 

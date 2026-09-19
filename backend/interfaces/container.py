@@ -95,7 +95,7 @@ class Container:
         self,
         ctx: CallContext,
         output: AudioOutput,
-        endpointer: EndpointerKind | None = None,
+        endpointer: EndpointDetector | None = None,
         config: SessionConfig | None = None,
     ) -> CallSession:
         return CallSession(
@@ -103,7 +103,7 @@ class Container:
             self.handle_turn,
             self.end_call,
             EnergyVad(),
-            self.endpointer(endpointer),
+            endpointer or self.endpointer(),
             output,
             self.clock,
             self.metrics,

@@ -13,7 +13,10 @@ import pytest
 from backend.application.dto.call_context import CallContext
 from backend.application.ports.endpoint_detector import EndpointDetector
 from backend.application.ports.pipeline_provider import Pipeline
-from backend.application.services.endpointing import SilenceEndpointDetector
+from backend.application.services.endpointing import (
+    SilenceEndpointDetector,
+    SmartTurnEndpointDetector,
+)
 from backend.application.use_cases.call_session import CallSession, SessionConfig
 from backend.domain.entities.call import CallStatus
 from backend.domain.value_objects.audio import AudioChunk
@@ -447,3 +450,29 @@ async def test_agent_hangs_up_after_goodbyes_unless_the_caller_talks_over_it() -
     world = world2
     call = await session.run(frames(interrupt=False))
     assert session.agent_hung_up and len(call.turns) == 2
+
+
+async def test_smart_turn_commits_turns_as_soon_as_its_model_says_they_are_finished() -> None:
+    heard: list[bytes] = []
+
+    def model(audio: bytes) -> float:
+        heard.append(audio)
+        return 0.9
+
+    world = make_world(
+        replies=["May I have your name?", "Thank you, Ms. Weber."],
+        utterances=["I need a lawyer for my lease.", "Anna Weber."],
+    )
+    session, _, _ = await make_session(
+        world, endpointer=SmartTurnEndpointDetector(model, onset_ms=200, ceiling_ms=1500)
+    )
+    caller = Caller(world, [1000, 800])
+    caller.session = session
+    call = await session.run(caller.frames())
+
+    assert [t.user_text for t in call.turns] == ["", "I need a lawyer for my lease.", "Anna Weber."]
+    for turn in call.turns[1:]:
+        assert turn.latency is not None
+        assert turn.latency.endpoint_detected == pytest.approx(200, abs=25)
+    assert len(heard) == 2
+    assert all(len(audio) == 8 * 16_000 * 2 for audio in heard)

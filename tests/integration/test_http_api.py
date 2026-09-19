@@ -168,9 +168,11 @@ async def test_token_dispatches_our_agent_with_the_pipeline_choice(api) -> None:
     assert json.loads(dispatch["metadata"])["pipeline"] == "selfhosted"
     assert json.loads(dispatch["metadata"])["endpointer"] == "semantic"
 
-    body = (await client.post("/token", json={"endpointer": "silence"})).json()
-    claims = jwt.decode(body["token"], SETTINGS.livekit_api_secret, algorithms=["HS256"])
-    assert json.loads(claims["roomConfig"]["agents"][0]["metadata"])["endpointer"] == "silence"
+    for choice in ("silence", "smart_turn"):
+        body = (await client.post("/token", json={"endpointer": choice})).json()
+        claims = jwt.decode(body["token"], SETTINGS.livekit_api_secret, algorithms=["HS256"])
+        metadata = json.loads(claims["roomConfig"]["agents"][0]["metadata"])
+        assert metadata["endpointer"] == choice
 
     assert (await client.post("/token", json={"persona": "nope"})).status_code == 404
     assert (await client.post("/token", json={"endpointer": "vibes"})).status_code == 422

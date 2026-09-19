@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 
 from backend.application.ports.pipeline_provider import Pipeline
 from backend.application.services.concurrency_supervisor import CapacityExceeded
-from backend.application.services.endpointing import EndpointerKind
+from backend.application.services.endpointing import EndpointerKind, SmartTurnEndpointDetector
 from backend.application.use_cases.start_call import BudgetExceeded
 from backend.domain.entities.call import Call
 from backend.domain.value_objects.pipeline_kind import PipelineKind
@@ -35,6 +35,7 @@ class LevelRun:
     reply_timeouts: int = 0
     lateness_ms: list[float] = field(default_factory=list)
     caller_observed_ms: list[float] = field(default_factory=list)
+    endpoint_inference_ms: list[float] = field(default_factory=list)
     unanswered_turns: int = 0
     wall_s: float = 0.0
 
@@ -91,7 +92,8 @@ class LevelRunner:
                     uses_gpu=True,
                 )
             output = PacedAudioOutput(self._c.clock)
-            session = self._c.session(ctx, output, endpointer=self._endpointer)
+            detector = self._c.endpointer(self._endpointer)
+            session = self._c.session(ctx, output, detector)
             caller = SyntheticCaller(self._conv, session, output)
             try:
                 call = await session.run(caller.frames())
@@ -101,5 +103,7 @@ class LevelRunner:
             except Exception:
                 log.exception("call %s failed", ctx.call.id)
                 result.failed += 1
+            if isinstance(detector, SmartTurnEndpointDetector):
+                result.endpoint_inference_ms.extend(detector.inference_ms)
             result.reply_timeouts += caller.timeouts
             result.lateness_ms.extend(caller.pacer.lateness_ms)

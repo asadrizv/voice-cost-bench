@@ -472,3 +472,48 @@ def test_provenance_of_an_ollama_run_records_no_vllm_serving_config() -> None:
     )
 
     assert info["models"] == {"llm_server": "ollama", "ollama_model": "qwen3.5:9b"}
+
+
+@needs_audio
+async def test_a_level_runs_with_smart_turn_and_reports_what_its_decisions_cost() -> None:
+    conversation = load_conversation(FIXTURES, "intake_en")
+    conversation = replace(
+        conversation, turns=conversation.turns[1:2], audio=conversation.audio[1:2]
+    )
+    container = build_container(
+        Settings(database_url=""),
+        NullMetrics(),  # type: ignore[arg-type]
+        repository=InMemoryCallRepository(),
+        supervisors={PipelineKind.SELFHOSTED: ConcurrencySupervisor(ceiling=2)},
+        turn_model=lambda audio: 0.9,
+    )
+    gpu = SimulatedGpu(SimulatedGpuProfile(speech_s_per_char=0.01))
+    runner = LevelRunner(
+        container, PipelineKind.SELFHOSTED, conversation, EndpointerKind.SMART_TURN, gpu
+    )
+
+    run = await runner.run(concurrency=2, duration_s=1)
+
+    assert run.failed == 0 and len(run.calls) == 2
+    assert all([t.user_text for t in call.turns][1:] for call in run.calls)
+    summary = report.summarise_level(run, conversation, simulated=True)
+    assert summary["endpoint_decisions"] >= 2
+    assert summary["endpoint_inference_p50_ms"] is not None
+    assert summary["endpoint_inference_p95_ms"] >= summary["endpoint_inference_p50_ms"]
+
+
+def test_a_level_without_an_audio_model_reports_no_inference_time() -> None:
+    summary = report.summarise_level(
+        LevelRun(concurrency=1, duration_s=1),
+        Conversation("intake_en", "law_firm", "en", ["Hello."], [[]]),
+    )
+    assert summary["endpoint_decisions"] == 0
+    assert summary["endpoint_inference_p50_ms"] is None
+    assert summary["endpoint_inference_p95_ms"] is None
+
+
+def test_the_harness_accepts_smart_turn_as_an_endpointer() -> None:
+    args = loadtest.build_parser().parse_args(
+        ["run", "--pipeline", "simulated", "--endpointer", "smart_turn"]
+    )
+    assert args.endpointer is EndpointerKind.SMART_TURN

@@ -121,7 +121,9 @@ async def entrypoint(ctx: JobContext) -> None:
         await ctx.room.local_participant.publish_track(
             agent_track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
         )
-        session = container.session(call_ctx, LiveKitAudioOutput(source), endpointer=endpointer)
+        session = container.session(
+            call_ctx, LiveKitAudioOutput(source), container.endpointer(endpointer)
+        )
 
         # The mic stream doesn't reliably end on disconnect, so a pump feeds a queue that
         # hang-up can terminate even while no frames are arriving.

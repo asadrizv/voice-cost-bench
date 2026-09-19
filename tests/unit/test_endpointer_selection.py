@@ -1,4 +1,5 @@
 import re
+import time
 
 import pytest
 from pydantic import ValidationError
@@ -44,6 +45,10 @@ def test_container_builds_smart_turn_from_the_injected_model() -> None:
     assert isinstance(detector, SmartTurnEndpointDetector)
     last = speak_then_silence(detector)
     detector.observe_audio(AudioChunk(b"\x00\x00" * 320), False, last + 0.25)
+    # The model runs off the audio loop, so the verdict lands a moment after the frame.
+    deadline = time.monotonic() + 5
+    while not detector.should_commit(last + 0.25) and time.monotonic() < deadline:
+        time.sleep(0.005)
     assert detector.should_commit(last + 0.25)
 
 

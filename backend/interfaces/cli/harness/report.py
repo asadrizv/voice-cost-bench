@@ -100,6 +100,13 @@ def summarise_level(
             f"caller_observed_p{pct}_ms": round(percentile(observed, pct), 1) if observed else None
             for pct in (50, 95, 99)
         },
+        "endpoint_decisions": len(run.endpoint_inference_ms),
+        **{
+            f"endpoint_inference_p{pct}_ms": round(percentile(run.endpoint_inference_ms, pct), 2)
+            if run.endpoint_inference_ms
+            else None
+            for pct in (50, 95)
+        },
         "caller_observed_turns": len(observed),
         "caller_observed_unanswered": run.unanswered_turns,
         "within_budget": budget.ok,
