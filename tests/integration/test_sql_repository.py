@@ -152,3 +152,31 @@ def binary_columns(metadata: MetaData) -> list[str]:
 def test_no_persisted_table_can_hold_audio() -> None:
     assert Base.metadata.sorted_tables
     assert binary_columns(Base.metadata) == []
+
+
+@pytest.mark.skipif(not os.environ.get("TEST_DATABASE_URL"), reason="needs the migrated Postgres")
+async def test_the_migrated_schema_has_no_column_that_can_hold_audio() -> None:
+    """Production runs the Alembic migrations, not the models, so a hand-written migration
+    adding a bytea column would slip past the model check above."""
+    r = SqlCallRepository.from_url(os.environ["TEST_DATABASE_URL"])
+    async with r._engine.connect() as conn:  # noqa: SLF001
+        tables = (
+            await conn.execute(
+                text("SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'")
+            )
+        ).scalar_one()
+        binary = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT table_name || '.' || column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND data_type = 'bytea'"
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    await r.dispose()
+    assert tables >= 2
+    assert binary == []
