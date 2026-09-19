@@ -32,26 +32,35 @@ ENGLISH = "Good morning, Hartley and Weber, this is Clara."
 AUDIBLE = REPO_ROOT / "results" / "tts"
 
 
-def cached(engine: type[Synthesizer]) -> None:
-    """Skips only when the weights are missing; a model that fails to load is a failure.
-    Each loader fetches its own subset of its repo, so asking for more than it would
-    download reads a usable cache as incomplete."""
-    if engine is Qwen3TtsSynthesizer:
-        patterns = pytest.importorskip("mlx_audio.utils").DEFAULT_ALLOW_PATTERNS
-    else:
-        patterns = None
-    from huggingface_hub import snapshot_download
-
-    try:
-        snapshot_download(engine.model, allow_patterns=patterns, local_files_only=True)
-    except Exception as exc:  # noqa: BLE001 - any lookup failure means "not downloaded here"
-        pytest.skip(f"{engine.model} is not cached: {exc}")
+RUNTIMES: dict[str, str] = {
+    KokoroSynthesizer.engine: "kokoro",
+    Qwen3TtsSynthesizer.engine: "mlx_audio.utils",
+}
+"""The module each engine's runtime lives in, both from the project's `local` extra.
+mlx-audio's is named one level down because that is where DEFAULT_ALLOW_PATTERNS is."""
 
 
 @pytest.fixture
-async def service(request: pytest.FixtureRequest) -> AsyncIterator[httpx.AsyncClient]:
-    engine: type[Synthesizer] = request.param
-    cached(engine)
+def engine(request: pytest.FixtureRequest) -> type[Synthesizer]:
+    """Sync, because pytest-asyncio turns a skip raised inside an async fixture into an
+    error. Skips only when the runtime or the weights are missing here; an engine that
+    then fails to load or speak is a failure."""
+    chosen: type[Synthesizer] = request.param
+    runtime = pytest.importorskip(RUNTIMES[chosen.engine])
+    from huggingface_hub import snapshot_download
+
+    # Each loader fetches its own subset of its repo, so asking for more than it would
+    # download reads a usable cache as incomplete.
+    patterns = getattr(runtime, "DEFAULT_ALLOW_PATTERNS", None)
+    try:
+        snapshot_download(chosen.model, allow_patterns=patterns, local_files_only=True)
+    except Exception as exc:  # noqa: BLE001 - any lookup failure means "not downloaded here"
+        pytest.skip(f"{chosen.model} is not cached: {exc}")
+    return chosen
+
+
+@pytest.fixture
+async def service(engine: type[Synthesizer]) -> AsyncIterator[httpx.AsyncClient]:
     started = time.perf_counter()
     async with run_asgi(create_app((engine,), workers=1)) as host:
         print(f"{engine.engine}: {time.perf_counter() - started:.1f} s to load and warm")
@@ -72,12 +81,12 @@ def save(name: str, pcm: bytes) -> Path:
 
 
 @pytest.mark.parametrize(
-    ("service", "text", "voice"),
+    ("engine", "text", "voice"),
     [
         pytest.param(KokoroSynthesizer, ENGLISH, "af_heart", id="kokoro"),
         pytest.param(Qwen3TtsSynthesizer, GERMAN, "qwen3-tts:clara_de", id="qwen3-tts"),
     ],
-    indirect=["service"],
+    indirect=["engine"],
 )
 async def test_the_engine_streams_a_sentence_as_24k_pcm(
     service: httpx.AsyncClient, text: str, voice: str
@@ -107,7 +116,7 @@ async def test_the_engine_streams_a_sentence_as_24k_pcm(
     assert np.abs(samples).mean() > 300
 
 
-@pytest.mark.parametrize("service", [Qwen3TtsSynthesizer], indirect=True)
+@pytest.mark.parametrize("engine", [Qwen3TtsSynthesizer], indirect=True)
 async def test_the_german_persona_greeting_is_synthesised_by_the_voice_it_configures(
     service: httpx.AsyncClient,
 ) -> None:
