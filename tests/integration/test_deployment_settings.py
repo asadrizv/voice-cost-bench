@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 
 import pytest
+from dotenv import dotenv_values
 
 from backend.infrastructure.config.settings import REPO_ROOT, MissingServingConfig, Settings
 
@@ -49,3 +50,9 @@ def test_the_env_example_lists_every_setting_the_gpu_services_read() -> None:
     }
     assert service_names
     assert service_names - _documented_names(REPO_ROOT / ".env.example") == set()
+
+
+def test_no_env_example_value_is_a_stray_comment() -> None:
+    """After an empty value, python-dotenv and compose read an inline comment as the value."""
+    values = dotenv_values(REPO_ROOT / ".env.example")
+    assert {name: v for name, v in values.items() if v and v.startswith("#")} == {}
