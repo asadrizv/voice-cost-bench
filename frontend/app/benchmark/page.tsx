@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { LineChart } from "@/components/charts";
-import { api, type Benchmark } from "@/lib/api";
+import { api, type Benchmark, type TelephonyQuote } from "@/lib/api";
 import { ms, usd } from "@/lib/format";
 
 export default function BenchmarkPage() {
@@ -33,6 +33,9 @@ export default function BenchmarkPage() {
     [levels],
   );
   const prov = data?.provenance;
+  const carriers = data?.telephony_quotes ?? [];
+  const priced = carriers.filter((q) => q.per_minute_usd != null);
+  const unpriced = carriers.filter((q) => q.per_minute_usd == null);
 
   return (
     <main>
@@ -158,6 +161,49 @@ export default function BenchmarkPage() {
             </div>
           </section>
 
+          {priced.length > 0 && (
+            <section className="card section">
+              <div className="card-head">
+                <h2>Cost per minute by carrier</h2>
+                <span className="muted small">Only the telephony line changes between carriers</span>
+              </div>
+              <div className="table-wrap">
+                <table data-testid="carrier-table">
+                  <thead>
+                    <tr>
+                      <th className="num">Concurrent</th>
+                      {priced.map((q) => (
+                        <th key={q.carrier} className="num">
+                          {q.carrier} ${q.per_minute_usd}/min{q.selected ? " (selected)" : ""}
+                          {!q.verified && <> <UnverifiedBadge /></>}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {levels.map((l) => (
+                      <tr key={l.concurrency}>
+                        <td className="num">{l.concurrency}</td>
+                        {priced.map((q) => {
+                          const cost = l.cost_per_minute_by_carrier_usd?.[q.carrier];
+                          return <td key={q.carrier} className="num">{cost == null ? "–" : usd(cost, 4)}</td>;
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <ul className="muted small">
+                {carriers.map((q) => <CarrierSource key={q.carrier} quote={q} />)}
+              </ul>
+              {unpriced.length > 0 && (
+                <p className="muted small">
+                  No cost column for {unpriced.map((q) => q.carrier).join(", ")}: no per-minute price is published.
+                </p>
+              )}
+            </section>
+          )}
+
           {data.utilisation_curve.length > 0 && (
             <section className="card section">
               <div className="card-head">
@@ -201,6 +247,24 @@ export default function BenchmarkPage() {
         </>
       )}
     </main>
+  );
+}
+
+function UnverifiedBadge() {
+  return (
+    <span className="badge" title="Fetched from the carrier's site but not checked by a person: do not quote">
+      <span className="status-dot" style={{ background: "var(--warning)" }} />unverified
+    </span>
+  );
+}
+
+function CarrierSource({ quote }: { quote: TelephonyQuote }) {
+  return (
+    <li>
+      <a href={quote.source_url}>{quote.carrier}</a>{" "}
+      {quote.verified ? `verified ${quote.checked_on}` : `unverified, fetched ${quote.checked_on}`}
+      {quote.note && `: ${quote.note}`}
+    </li>
   );
 }
 

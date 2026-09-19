@@ -139,6 +139,7 @@ export interface BenchmarkLevel {
   call_minutes: number;
   cost_per_minute_usd: number;
   cost_per_minute_by_stage_usd: Cost;
+  cost_per_minute_by_carrier_usd?: Record<string, number>;
   effective_concurrency: number;
   latency_ms: Record<LatencyStage, { p50: number; p95: number; mean: number }>;
   end_to_end_p95_ms: number;
@@ -147,6 +148,17 @@ export interface BenchmarkLevel {
   stt_wer: number | null;
   harness_valid: boolean;
   harness_lateness_p95_ms: number;
+}
+
+/** per_minute_usd is null when the carrier publishes no per-minute price; note says why. */
+export interface TelephonyQuote {
+  carrier: string;
+  per_minute_usd: number | null;
+  source_url: string;
+  checked_on: string;
+  verified: boolean;
+  selected: boolean;
+  note: string;
 }
 
 export interface Benchmark {
@@ -161,5 +173,6 @@ export interface Benchmark {
   } | null;
   utilisation_curve: Array<Record<string, number>>;
   client_gpu_quotes: Array<{ provider: string; sku: string; region: string; hourly_usd: number }>;
+  telephony_quotes?: TelephonyQuote[];
   baseline?: { provenance: Record<string, unknown>; level: BenchmarkLevel | null };
 }

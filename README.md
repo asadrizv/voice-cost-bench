@@ -141,8 +141,10 @@ nothing.
 
 - **Rates were last verified 2026-09-17** (`config/rates.yaml`). Re-check before quoting;
   L40S prices move fast.
-- **Telephony ($0.014/min) is in both pipelines** and becomes the largest line item once
-  the GPU is shared. It's identical on both sides, so it narrows the percentage saving.
+- **Telephony is in both pipelines** and becomes the largest line item once the GPU is
+  shared. It's identical on both sides, so it narrows the percentage saving. The selected
+  carrier in `config/rates.yaml` (Twilio, $0.014/min) prices it; the benchmark also shows
+  cost per minute under each other listed carrier. Telnyx and sipgate are unverified.
 - **Kokoro has no German voice.** German self-hosted TTS needs a multilingual model
   (Chatterbox Multilingual, Orpheus) before any German comparison is fair.
 - **The WER corpus is synthetic speech** (`fixtures/wer/README.md`). It's fine for
