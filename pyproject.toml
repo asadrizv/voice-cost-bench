@@ -21,6 +21,8 @@ dependencies = [
     "numpy>=2.0",
     "prometheus-client>=0.21",
     "sse-starlette>=2.1",
+    "onnxruntime>=1.30.0",
+    "huggingface-hub>=1.32.0",
 ]
 
 [project.optional-dependencies]

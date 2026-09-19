@@ -2,7 +2,11 @@ export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080
 
 export type Pipeline = "api" | "selfhosted";
 /** Mirrors EndpointerKind in backend/application/services/endpointing.py. */
-export const ENDPOINTERS = { semantic: "Semantic endpointing", silence: "Silence threshold" } as const;
+export const ENDPOINTERS = {
+  semantic: "Semantic endpointing",
+  silence: "Silence threshold",
+  smart_turn: "Smart Turn v3.2 (audio model)",
+} as const;
 export type Endpointer = keyof typeof ENDPOINTERS;
 export const DEFAULT_ENDPOINTER: Endpointer = "semantic";
 export const STAGES = ["stt", "llm", "tts", "gpu", "telephony"] as const;

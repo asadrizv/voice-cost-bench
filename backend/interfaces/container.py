@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from backend.application.dto.call_context import CallContext
@@ -16,6 +17,7 @@ from backend.application.services.endpointing import (
     EndpointerKind,
     SemanticEndpointDetector,
     SilenceEndpointDetector,
+    SmartTurnEndpointDetector,
 )
 from backend.application.use_cases.call_session import CallSession, SessionConfig
 from backend.application.use_cases.compare_pipelines import ComparePipelines
@@ -71,6 +73,8 @@ class Container:
     compute_cost: ComputeCallCost
     compare: ComparePipelines
     describe_components: DescribeComponents
+    turn_model: Callable[[bytes], float] | None = None
+    """Smart Turn's model call; None loads the real one the first time it is selected."""
 
     def endpointer(self, kind: EndpointerKind | None = None) -> EndpointDetector:
         match kind or self.settings.endpointer:
@@ -78,6 +82,14 @@ class Container:
                 return SilenceEndpointDetector()
             case EndpointerKind.SEMANTIC:
                 return SemanticEndpointDetector()
+            case EndpointerKind.SMART_TURN:
+                # Imported here so processes that never select it pay neither onnxruntime's
+                # import nor the model download.
+                from backend.infrastructure.endpointing import smart_turn
+
+                return SmartTurnEndpointDetector(
+                    self.turn_model or smart_turn.load_model(), executor=smart_turn.pool()
+                )
 
     def session(
         self,
@@ -129,6 +141,7 @@ def build_container(
     repository: CallRepository | None = None,
     pipelines: PipelineProvider | None = None,
     supervisors: dict[PipelineKind, ConcurrencySupervisor] | None = None,
+    turn_model: Callable[[bytes], float] | None = None,
 ) -> Container:
     clock = SystemClock()
     repository = repository or build_repository(settings)
@@ -167,6 +180,7 @@ def build_container(
         end_call=EndCall(repository, metrics, calculator, clock),
         compute_cost=ComputeCallCost(repository, calculator),
         compare=ComparePipelines(repository),
+        turn_model=turn_model,
         describe_components=DescribeComponents(
             catalogue,
             None

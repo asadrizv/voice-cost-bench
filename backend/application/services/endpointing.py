@@ -1,16 +1,22 @@
 from __future__ import annotations
 
+import logging
 import re
+import time
 from collections.abc import Callable
+from concurrent.futures import Executor, Future
 from enum import StrEnum
 
 from backend.application.ports.stt_port import TranscriptEvent
-from backend.domain.value_objects.audio import AudioChunk
+from backend.domain.value_objects.audio import PCM16_16K_MONO, AudioChunk, AudioFormat
+
+log = logging.getLogger(__name__)
 
 
 class EndpointerKind(StrEnum):
     SEMANTIC = "semantic"
     SILENCE = "silence"
+    SMART_TURN = "smart_turn"
 
 
 class _TranscriptTracker:
@@ -206,3 +212,127 @@ class SemanticEndpointDetector:
         if p <= 0.2:
             return self._max
         return self._default
+
+
+WINDOW_S = 8.0
+"""What Smart Turn v3.2 reads: the last 8 s of the turn, left-padded when it is shorter.
+Source: pipecat-ai/smart-turn-v3 inference.py."""
+PRE_SPEECH_S = 0.5
+"""Room tone kept ahead of the caller's first word, so the model hears the turn start."""
+
+
+class SmartTurnEndpointDetector:
+    """Asks an audio turn-completion model whether the caller has finished, once a short
+    pause follows their speech, and commits when it says yes.
+
+    `probability` returns P(turn complete) for 8 s of 16 kHz PCM16; Smart Turn v3.2 takes
+    around 10 ms per call, which is half a frame, so it is run on `executor` when one is
+    given and the frame loop keeps going while it thinks. It is asked once per pause and
+    again on the whole turn if the caller resumes; a pause the model never calls complete
+    commits at `ceiling_ms`, so a failing or slow model only costs the silence baseline.
+    """
+
+    def __init__(
+        self,
+        probability: Callable[[bytes], float],
+        onset_ms: float = 200,
+        ceiling_ms: float = 1500,
+        threshold: float = 0.5,
+        executor: Executor | None = None,
+        timer: Callable[[], float] = time.perf_counter,
+        audio_format: AudioFormat = PCM16_16K_MONO,
+    ) -> None:
+        self._probability = probability
+        self._onset_ms = onset_ms
+        self._ceiling_ms = ceiling_ms
+        self._threshold = threshold
+        self._executor = executor
+        self._timer = timer
+        self._format = audio_format
+        self._window_bytes = audio_format.byte_count(WINDOW_S)
+        self._pre_speech_bytes = audio_format.byte_count(PRE_SPEECH_S)
+        self._inference_ms: list[float] = []
+        self.reset()
+
+    def reset(self) -> None:
+        self._speech = _SpeechTracker()
+        self._audio = bytearray()
+        self._verdict: float | None = None
+        self._asked = False
+        self._pending: Future[tuple[float, float]] | None = None
+
+    def observe_audio(self, frame: AudioChunk, is_speech: bool, now: float) -> None:
+        if frame.format != self._format:
+            raise ValueError(f"Smart Turn needs {self._format}, got {frame.format}")
+        self._speech.observe(is_speech, now)
+        self._audio += frame.data
+        keep = self._window_bytes if self._speech.heard_speech else self._pre_speech_bytes
+        if len(self._audio) > keep:
+            del self._audio[: len(self._audio) - keep]
+        if is_speech:
+            self._forget_decision()
+            return
+        silence = self._speech.silence_ms(now)
+        if not self._asked and silence is not None and silence >= self._onset_ms:
+            self._asked = True
+            self._pending = self._ask(self._window())
+
+    def observe_transcript(self, event: TranscriptEvent, now: float) -> None:
+        return None
+
+    def observe_agent_turn(self, text: str) -> None:
+        return None
+
+    def should_commit(self, now: float) -> bool:
+        silence = self._speech.silence_ms(now)
+        if silence is None:
+            return False
+        if silence >= self._ceiling_ms:
+            return True
+        self._collect_decision()
+        return self._verdict is not None and self._verdict > self._threshold
+
+    @property
+    def speech_end(self) -> float | None:
+        return self._speech.last_speech
+
+    @property
+    def inference_ms(self) -> tuple[float, ...]:
+        """How long the model took over each decision this call, in arrival order."""
+        return tuple(self._inference_ms)
+
+    def _window(self) -> bytes:
+        return bytes(self._window_bytes - len(self._audio)) + bytes(self._audio)
+
+    def _ask(self, audio: bytes) -> Future[tuple[float, float]]:
+        if self._executor is not None:
+            return self._executor.submit(self._timed_probability, audio)
+        decided: Future[tuple[float, float]] = Future()
+        try:
+            decided.set_result(self._timed_probability(audio))
+        except Exception as exc:
+            decided.set_exception(exc)
+        return decided
+
+    def _timed_probability(self, audio: bytes) -> tuple[float, float]:
+        started = self._timer()
+        return self._probability(audio), (self._timer() - started) * 1000
+
+    def _collect_decision(self) -> None:
+        if self._pending is None or not self._pending.done():
+            return
+        decided, self._pending = self._pending, None
+        try:
+            self._verdict, inference_ms = decided.result()
+        except Exception:
+            log.warning("Smart Turn inference failed; holding for the silence ceiling")
+            return
+        self._inference_ms.append(inference_ms)
+
+    def _forget_decision(self) -> None:
+        """The caller is speaking again: whatever the model was asked about is stale."""
+        if self._pending is not None:
+            self._pending.cancel()
+        self._pending = None
+        self._asked = False
+        self._verdict = None
