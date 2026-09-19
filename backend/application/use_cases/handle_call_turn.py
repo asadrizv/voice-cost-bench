@@ -227,7 +227,10 @@ class HandleCallTurn:
             agent_text=progress.agent_text,
             usage=usage,
             cost=cost,
-            latency=None if is_greeting else request.timeline.breakdown(),
+            # No agent audio, no response to time: a zero here would drag percentiles down.
+            latency=None
+            if is_greeting or not progress.audio_started
+            else request.timeline.breakdown(),
             interrupted=interrupted,
             started_at=started_at,
         )

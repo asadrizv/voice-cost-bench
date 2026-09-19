@@ -367,3 +367,44 @@ def test_provenance_records_what_ran_and_whether_it_was_confirmed(
     ]
     assert set(info["models"]) == model_facts
     assert "whisper" not in str(info["models"]) and "deepgram" not in str(info["models"])
+
+
+async def test_the_caller_waits_for_an_answer_when_a_pause_splits_its_turn() -> None:
+    """A mid-utterance pause lets semantic endpointing commit early; the caller talks on,
+    barges in, and the cut-off turn is recorded. A caller that counted recorded turns as
+    answers then spoke its next line over the agent, leaving turns unanswered."""
+    paused = _tone_utterance(1.0, 0.35) + _tone_utterance(1.0, 0.2)
+    conversation = Conversation(
+        "paused",
+        "law_firm",
+        "en",
+        ["It's a tenancy issue.", "He's refusing to return my deposit.", "No deadline."],
+        [paused, _tone_utterance(0.8, 0.2)],
+    )
+    container = build_container(
+        Settings(database_url=""),
+        NullMetrics(),  # type: ignore[arg-type]
+        repository=InMemoryCallRepository(),
+    )
+    gpu = SimulatedGpu(
+        SimulatedGpuProfile(
+            stt_final_ms=0,
+            llm_ttft_ms=400,
+            llm_ttft_per_active_ms=0,
+            llm_tokens_per_s=1e6,
+            tts_first_byte_ms=100,
+            speech_s_per_char=0.002,
+            interim_after_speech_s=0.5,
+            jitter=0,
+        )
+    )
+    runner = LevelRunner(
+        container, PipelineKind.SELFHOSTED, conversation, EndpointerKind.SEMANTIC, gpu
+    )
+
+    run = await runner.run(concurrency=1, duration_s=0.1)
+
+    [call] = run.calls
+    assert any(t.interrupted for t in call.turns), "the pause should split the first turn"
+    assert run.unanswered_turns == 0
+    assert all(t.latency is None for t in call.turns if t.interrupted and not t.agent_text)

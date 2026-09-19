@@ -86,9 +86,9 @@ class SyntheticCaller:
         self.timeouts = 0
 
     async def frames(self) -> AsyncIterator[AudioChunk]:
-        async for chunk in self._await_reply(expected_turns=1):
+        async for chunk in self._await_reply():
             yield chunk
-        for index, utterance in enumerate(self._conv.audio):
+        for utterance in self._conv.audio:
             self._output.caller_speech_started()
             last_voiced = _last_audible_frame(utterance)
             for position, chunk in enumerate(utterance):
@@ -98,17 +98,19 @@ class SyntheticCaller:
                     # this frame before anything else can run, so both sides agree.
                     self._output.caller_speech_ended()
                 yield chunk
-            async for chunk in self._await_reply(expected_turns=index + 2):
+            async for chunk in self._await_reply():
                 yield chunk
 
-    async def _await_reply(self, expected_turns: int) -> AsyncIterator[AudioChunk]:
-        """Silence until the agent has answered and finished playing (or gave up)."""
+    async def _await_reply(self) -> AsyncIterator[AudioChunk]:
+        """Silence until the agent has been heard answering and has finished playing (or
+        gave up). Counting recorded turns instead mistook a turn cut off by a mid-sentence
+        pause for an answer, so the caller spoke its next line over the agent."""
         deadline = time.monotonic() + self._reply_timeout
         while True:
             await self.pacer.tick()
             yield SILENCE
-            answered = len(self._session.call.turns) >= expected_turns
-            if answered and not self._session.agent_busy and self._output.drained():
+            heard = self._output.first_audio_at is not None and not self._output.awaiting_answer
+            if heard and not self._session.agent_busy and self._output.drained():
                 return
             if time.monotonic() > deadline:
                 self.timeouts += 1

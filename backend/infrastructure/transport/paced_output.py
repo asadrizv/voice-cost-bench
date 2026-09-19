@@ -33,6 +33,11 @@ class PacedAudioOutput:
         self._caller_stopped_at = self._clock.monotonic()
 
     @property
+    def awaiting_answer(self) -> bool:
+        """The caller has finished speaking and no audible agent audio has played since."""
+        return self._caller_stopped_at is not None
+
+    @property
     def unanswered_turns(self) -> int:
         return self._unanswered + (self._caller_stopped_at is not None)
 
