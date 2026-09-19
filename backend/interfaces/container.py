@@ -87,6 +87,8 @@ class Container:
                 # import nor the model download.
                 from backend.infrastructure.endpointing import smart_turn
 
+                if self.turn_model is None:
+                    smart_turn.warm()
                 return SmartTurnEndpointDetector(
                     self.turn_model or smart_turn.probability, executor=smart_turn.pool()
                 )

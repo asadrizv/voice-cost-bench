@@ -92,3 +92,31 @@ def test_selecting_smart_turn_does_not_load_the_model_on_the_calling_thread() ->
 
     assert detector is not None
     assert loads == []
+
+
+def test_selecting_smart_turn_warms_the_model_in_the_background() -> None:
+    """Loading it on the first decision instead made that turn wait for the ceiling
+    (1,519 ms measured on a real call); the greeting is long enough to load it under."""
+    from backend.infrastructure.endpointing import smart_turn
+
+    warmed = threading.Event()
+    threads: list[str] = []
+    original = smart_turn.load_model
+
+    def record(*args: object, **kwargs: object) -> object:
+        threads.append(threading.current_thread().name)
+        warmed.set()
+        return original(*args, **kwargs)  # type: ignore[arg-type]
+
+    smart_turn.load_model = record  # type: ignore[assignment]
+    try:
+        container = build_container(
+            Settings(database_url="", endpointer=EndpointerKind.SMART_TURN),
+            NullMetrics(),  # type: ignore[arg-type]
+        )
+        container.endpointer()
+        assert warmed.wait(timeout=10)
+    finally:
+        smart_turn.load_model = original  # type: ignore[assignment]
+
+    assert threads and threading.current_thread().name not in threads

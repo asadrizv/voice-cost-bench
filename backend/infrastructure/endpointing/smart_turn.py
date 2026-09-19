@@ -74,6 +74,12 @@ def load_model(offline: bool = False) -> SmartTurnModel:
     return SmartTurnModel(path)
 
 
+def warm() -> None:
+    """Loads the model on the decision pool while the caller is still being greeted, so the
+    first turn doesn't wait out the endpointer's ceiling for it."""
+    pool().submit(load_model)
+
+
 def probability(audio: bytes) -> float:
     """Loads the model on first use, on whichever thread runs the decision. Loading it
     where the detector is built would stall the agent's audio loop (147 ms measured for
