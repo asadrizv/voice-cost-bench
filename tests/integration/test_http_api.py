@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import shutil
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import httpx
 import jwt
@@ -11,7 +13,9 @@ from backend.application.ports.pipeline_provider import Pipeline
 from backend.application.use_cases.handle_call_turn import TurnRequest
 from backend.domain.entities.latency import TurnTimeline
 from backend.domain.value_objects.pipeline_kind import PipelineKind
+from backend.infrastructure.config.component_catalogue import ComponentCatalogueError
 from backend.infrastructure.config.settings import Settings
+from backend.interfaces.container import validate_static_config
 from backend.interfaces.http.app import create_app
 from tests.fakes import FakeClock, FakeLlm, FakeTts, RecordingOutput, ScriptedStt, StaticPipelines
 
@@ -222,3 +226,90 @@ async def test_transparency_lists_every_component_of_both_pipelines(api) -> None
     assert selfhosted["tts"]["licence"] == "Apache-2.0" and not selfhosted["tts"]["leaves_eu"]
     assert selfhosted["orchestration"]["id"] == "livekit-cloud"
     assert selfhosted["storage"]["id"] == "in-memory"
+
+
+def config_copy(tmp_path: Path) -> Path:
+    config = tmp_path / "config"
+    shutil.copytree(SETTINGS.config_dir, config)
+    return config
+
+
+async def transparency_of(settings: Settings) -> dict[str, dict[str, dict[str, object]]]:
+    app = create_app(settings, pipelines=StaticPipelines({}))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        body = (await client.get("/transparency")).json()
+    return {p: {c["kind"]: c for c in cs} for p, cs in body["pipelines"].items()}
+
+
+async def test_transparency_follows_the_catalogue_and_the_running_configuration(
+    tmp_path: Path,
+) -> None:
+    config = config_copy(tmp_path)
+    catalogue = config / "components.yaml"
+    catalogue.write_text(
+        catalogue.read_text().replace(
+            "licence: Apache-2.0\n\n  livekit-server", "licence: X\n\n  livekit-server"
+        )
+    )
+    settings = SETTINGS.model_copy(
+        update={
+            "config_dir": config,
+            "deepgram_model": "nova-3-medical",
+            "llm_server": "ollama",
+            "vllm_model": "qwen3.5:9b",
+            "whisper_backend": "mlx",
+            "livekit_url": "ws://localhost:7880",
+        }
+    )
+
+    stacks = await transparency_of(settings)
+
+    assert stacks["selfhosted"]["tts"]["licence"] == "X"
+    assert stacks["api"]["stt"]["model"] == "nova-3-medical"
+    assert stacks["selfhosted"]["llm"]["id"] == "ollama:qwen3.5:9b"
+    assert stacks["selfhosted"]["llm"]["model"] == "qwen3.5:9b"
+    assert stacks["selfhosted"]["stt"]["model"] == "mlx-community/whisper-large-v3-turbo"
+    assert stacks["api"]["orchestration"]["id"] == "livekit-server"
+    assert stacks["api"]["orchestration"]["leaves_eu"] is False
+
+
+@pytest.mark.parametrize(
+    ("update", "edit", "named"),
+    [
+        ({"llm_server": "ollama", "vllm_model": "llama3.2"}, None, "'ollama:llama3.2'"),
+        ({"whisper_backend": "voxtral"}, None, "'voxtral'"),
+        (
+            {"database_url": "postgresql://x/y"},
+            ("  postgres:\n", "  postgres-old:\n"),
+            "'postgres'",
+        ),
+        ({}, ("licence: Apache-2.0\n\n  livekit", "\n\n  livekit"), "'kokoro': needs licence"),
+        ({}, ("vendor: Deepgram\n", "vendor: Deepgram\n    model: nova-2\n"), "model comes"),
+        ({}, ("host: gpu_host\n    licence: Apache", "host: mars\n    licence: Apache"), "'mars'"),
+        (
+            {},
+            (
+                "leaves_eu: true\n    assumption: Deepgram",
+                "assumption: Deepgram",
+            ),
+            "leaves_eu",
+        ),
+        ({}, ("  kokoro:\n    kind: tts", "  kokoro:\n    kind: stt"), "kind 'stt'"),
+    ],
+)
+def test_a_configured_component_without_a_complete_catalogue_entry_fails_startup(
+    tmp_path: Path, update: dict[str, str], edit: tuple[str, str] | None, named: str
+) -> None:
+    config = config_copy(tmp_path)
+    if edit is not None:
+        catalogue = config / "components.yaml"
+        text = catalogue.read_text()
+        assert edit[0] in text
+        catalogue.write_text(text.replace(edit[0], edit[1], 1))
+    settings = SETTINGS.model_copy(update={"config_dir": config, **update})
+
+    with pytest.raises(ComponentCatalogueError, match=named):
+        validate_static_config(settings)
+    with pytest.raises(ComponentCatalogueError, match=named):
+        create_app(settings, pipelines=StaticPipelines({}))

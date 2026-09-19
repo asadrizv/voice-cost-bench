@@ -1,15 +1,6 @@
-# Every component that touches a call, served at GET /transparency and copied into
-# benchmark provenance. Which entry each pipeline uses is chosen by the running
-# configuration (PipelineFactory's configured_components); a configured entry missing
-# here fails startup.
-#
-# Values the configuration already holds are NOT repeated here and are rejected if they
-# are: API model names (DEEPGRAM_MODEL, OPENAI_MODEL, ELEVENLABS_MODEL), the self-hosted
-# LLM's model and revision (the serving config, or VLLM_MODEL under Ollama).
-#
-# `assumption` says, in words, which values are not verified against a contract or a
-# deployment. `host` points self-run components at a deployment below, which supplies
-# their region and leaves_eu.
+# Every component that touches a call: served at GET /transparency, copied into provenance.
+# The running configuration picks each pipeline's entries (configured_components); a
+# configured entry missing here fails startup, as does repeating a configured model.
 version: 1
 
 hosts:
