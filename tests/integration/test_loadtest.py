@@ -502,6 +502,17 @@ async def test_a_level_runs_with_smart_turn_and_reports_what_its_decisions_cost(
     assert summary["endpoint_inference_p95_ms"] >= summary["endpoint_inference_p50_ms"]
 
 
+def test_a_level_reports_the_spread_of_its_endpointer_inference_times() -> None:
+    run = LevelRun(concurrency=1, duration_s=1)
+    run.endpoint_inference_ms.extend([8.0, 10.0, 12.005, 40.0])
+    summary = report.summarise_level(
+        run, Conversation("intake_en", "law_firm", "en", ["Hello."], [[]])
+    )
+    assert summary["endpoint_decisions"] == 4
+    assert summary["endpoint_inference_p50_ms"] == 11.0  # 11.0025, to two decimals
+    assert summary["endpoint_inference_p95_ms"] == 35.8  # 35.80075, interpolated
+
+
 def test_a_level_without_an_audio_model_reports_no_inference_time() -> None:
     summary = report.summarise_level(
         LevelRun(concurrency=1, duration_s=1),

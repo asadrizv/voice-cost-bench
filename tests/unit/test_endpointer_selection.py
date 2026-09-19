@@ -1,4 +1,5 @@
 import re
+import threading
 import time
 
 import pytest
@@ -35,11 +36,17 @@ def test_container_builds_the_named_endpointer_defaulting_to_settings() -> None:
     assert isinstance(container.endpointer(EndpointerKind.SILENCE), SilenceEndpointDetector)
 
 
-def test_container_builds_smart_turn_from_the_injected_model() -> None:
+def test_container_asks_the_injected_model_off_the_audio_loop() -> None:
+    asked: list[threading.Thread] = []
+
+    def model(audio: bytes) -> float:
+        asked.append(threading.current_thread())
+        return 0.9
+
     container = build_container(
         Settings(database_url="", endpointer=EndpointerKind.SMART_TURN),
         NullMetrics(),  # type: ignore[arg-type]
-        turn_model=lambda audio: 0.9,
+        turn_model=model,
     )
     detector = container.endpointer()
     assert isinstance(detector, SmartTurnEndpointDetector)
@@ -50,6 +57,7 @@ def test_container_builds_smart_turn_from_the_injected_model() -> None:
     while not detector.should_commit(last + 0.25) and time.monotonic() < deadline:
         time.sleep(0.005)
     assert detector.should_commit(last + 0.25)
+    assert asked == [asked[0]] and asked[0] is not threading.current_thread()
 
 
 def test_the_browser_offers_every_endpointer_the_backend_knows() -> None:

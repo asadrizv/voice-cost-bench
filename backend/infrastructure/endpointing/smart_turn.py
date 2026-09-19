@@ -58,13 +58,18 @@ class SmartTurnModel:
         return float(probability)
 
 
-@functools.cache
-def load_model(offline: bool = False) -> SmartTurnModel:
-    """Downloads the weights once into the Hugging Face cache, then loads them. Called on
-    the first call that selects Smart Turn, never at import."""
-    path = hf_hub_download(
+def weights(offline: bool = False) -> str:
+    """The weights file, downloaded into the Hugging Face cache the first time. With
+    `offline`, raises rather than downloading when the cache does not hold them."""
+    return hf_hub_download(
         MODEL_REPO, MODEL_FILE, revision=MODEL_REVISION, local_files_only=offline
     )
+
+
+@functools.cache
+def load_model(offline: bool = False) -> SmartTurnModel:
+    """Loads the model on the first call that selects Smart Turn, never at import."""
+    path = weights(offline)
     log.info("Smart Turn v3.2 loaded from %s", path)
     return SmartTurnModel(path)
 
@@ -95,7 +100,9 @@ def _mel_filters() -> npt.NDArray[np.float64]:
     """Slaney-scaled triangular mel filter bank, matching transformers' `mel_filter_bank`
     with `norm="slaney"` and `mel_scale="slaney"`."""
     fft_frequencies = np.linspace(0, SAMPLE_RATE / 2, N_FFT // 2 + 1)
-    edges = _mel_to_hertz(np.linspace(0, _hertz_to_mel(SAMPLE_RATE / 2), MEL_BINS + 2))
+    # 8 kHz sits above the Slaney scale's 1 kHz knee, so the top edge takes its log branch.
+    top_mel = _MEL_LOG_MEL + float(np.log(SAMPLE_RATE / 2 / _MEL_LOG_HERTZ)) * _MEL_LOG_STEP
+    edges = _mel_to_hertz(np.linspace(0, top_mel, MEL_BINS + 2))
     slopes = edges[np.newaxis, :] - fft_frequencies[:, np.newaxis]
     widths = np.diff(edges)
     falling = -slopes[:, :-2] / widths[:-1]
@@ -107,12 +114,6 @@ def _mel_filters() -> npt.NDArray[np.float64]:
 _MEL_LOG_HERTZ = 1000.0
 _MEL_LOG_MEL = 15.0
 _MEL_LOG_STEP = 27.0 / np.log(6.4)
-
-
-def _hertz_to_mel(hertz: float) -> float:
-    if hertz < _MEL_LOG_HERTZ:
-        return 3.0 * hertz / 200.0
-    return _MEL_LOG_MEL + float(np.log(hertz / _MEL_LOG_HERTZ)) * _MEL_LOG_STEP
 
 
 def _mel_to_hertz(mel: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:

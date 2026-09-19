@@ -3,6 +3,7 @@ not in the Hugging Face cache, so CI never downloads 8.7 MB to run the suite."""
 
 from __future__ import annotations
 
+import hashlib
 import statistics
 import time
 import wave
@@ -24,10 +25,23 @@ needs_audio = pytest.mark.skipif(
 
 
 def cached_model() -> smart_turn.SmartTurnModel:
+    """Skips only when the weights are missing; a model that fails to load is a failure."""
     try:
-        return smart_turn.load_model(offline=True)
-    except Exception as exc:  # noqa: BLE001 - any download or load failure means "not here"
+        smart_turn.weights(offline=True)
+    except Exception as exc:  # noqa: BLE001 - any lookup failure means "not downloaded here"
         pytest.skip(f"Smart Turn weights are not cached: {exc}")
+    return smart_turn.load_model(offline=True)
+
+
+def test_the_pinned_weights_are_the_published_int8_cpu_model() -> None:
+    """The digest of pipecat-ai/smart-turn-v3 `smart-turn-v3.2-cpu.onnx` at the pinned
+    revision, read from Hugging Face on 19 Sep 2026."""
+    try:
+        path = smart_turn.weights(offline=True)
+    except Exception as exc:  # noqa: BLE001 - any lookup failure means "not downloaded here"
+        pytest.skip(f"Smart Turn weights are not cached: {exc}")
+    digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    assert digest == "2bb026316b14a660486a75b1733cd3fbab8c2fd0314dc9af7be49f8cca967e4f"
 
 
 def pcm16(path: Path, fraction: float = 1.0) -> bytes:

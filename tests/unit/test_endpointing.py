@@ -299,8 +299,10 @@ def test_smart_turn_records_what_each_decision_cost_in_inference_time() -> None:
 
 def test_smart_turn_keeps_the_audio_loop_moving_while_the_model_thinks() -> None:
     started, release = threading.Event(), threading.Event()
+    heard: list[int] = []
 
     def slow_model(audio: bytes) -> float:
+        heard.append(len(audio))
         started.set()
         release.wait(5)
         return 0.9
@@ -319,6 +321,7 @@ def test_smart_turn_keeps_the_audio_loop_moving_while_the_model_thinks() -> None
         while not d.should_commit(t) and time.monotonic() < deadline:
             time.sleep(0.005)
         assert d.should_commit(t)
+        assert heard == [WINDOW_BYTES]
         assert len(d.inference_ms) == 1
 
 
@@ -336,3 +339,31 @@ def test_smart_turn_refuses_audio_it_was_not_trained_on() -> None:
     d = SmartTurnEndpointDetector(lambda audio: 0.9)
     with pytest.raises(ValueError, match="16000"):
         d.observe_audio(AudioChunk(b"\x00\x00" * 960, PCM16_48K_MONO), True, 0.0)
+
+
+def test_smart_turn_defaults_ask_after_200_ms_and_give_up_at_1500_ms() -> None:
+    finished = SmartTurnEndpointDetector(lambda audio: 0.9)
+    finished.observe_audio(FRAME, True, 0.0)
+    finished.observe_audio(FRAME, False, 0.2)
+    assert finished.should_commit(0.2)
+
+    unfinished = SmartTurnEndpointDetector(lambda audio: 0.4)
+    unfinished.observe_audio(FRAME, True, 0.0)
+    unfinished.observe_audio(FRAME, False, 1.4)
+    assert not unfinished.should_commit(1.4)
+    assert unfinished.should_commit(1.5)
+
+
+def test_smart_turn_asks_the_moment_the_pause_reaches_its_onset() -> None:
+    model = RecordingModel()
+    d = SmartTurnEndpointDetector(model, onset_ms=250)
+    d.observe_audio(FRAME, True, 0.0)
+    d.observe_audio(FRAME, False, 0.2)
+    assert model.heard == []
+    d.observe_audio(FRAME, False, 0.25)
+    assert len(model.heard) == 1
+
+
+def test_smart_turn_holds_a_turn_the_model_is_only_half_sure_about() -> None:
+    d = SmartTurnEndpointDetector(lambda audio: 0.5, onset_ms=TEN_FRAME_ONSET_MS, ceiling_ms=1500)
+    assert first_commit_after_silence(d, speak_then_silence(d)) == pytest.approx(1.5, abs=0.021)
