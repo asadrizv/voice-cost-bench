@@ -4,6 +4,7 @@ import re
 from collections.abc import Callable
 
 from backend.application.ports.stt_port import TranscriptEvent
+from backend.domain.value_objects.audio import AudioChunk
 
 
 class _TranscriptTracker:
@@ -57,7 +58,7 @@ class SilenceEndpointDetector:
         self._speech = _SpeechTracker()
         self._transcript = _TranscriptTracker()
 
-    def observe_audio(self, is_speech: bool, now: float) -> None:
+    def observe_audio(self, frame: AudioChunk, is_speech: bool, now: float) -> None:
         self._speech.observe(is_speech, now)
 
     def observe_transcript(self, event: TranscriptEvent, now: float) -> None:
@@ -161,7 +162,7 @@ class SemanticEndpointDetector:
         self._transcript = _TranscriptTracker()
         self._cached_text = None
 
-    def observe_audio(self, is_speech: bool, now: float) -> None:
+    def observe_audio(self, frame: AudioChunk, is_speech: bool, now: float) -> None:
         self._speech.observe(is_speech, now)
 
     def observe_transcript(self, event: TranscriptEvent, now: float) -> None:

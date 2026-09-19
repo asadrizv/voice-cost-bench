@@ -7,14 +7,17 @@ from backend.application.services.endpointing import (
     expects_dictation,
     heuristic_completeness,
 )
+from backend.domain.value_objects.audio import AudioChunk
+
+FRAME = AudioChunk(b"\x00\x00" * 320)
 
 
 def speak_then_silence(detector, speech_s: float = 1.0, t0: float = 0.0) -> float:  # type: ignore[no-untyped-def]
     t = t0
     while t < t0 + speech_s:
-        detector.observe_audio(True, t)
+        detector.observe_audio(FRAME, True, t)
         t += 0.02
-    detector.observe_audio(False, t)
+    detector.observe_audio(FRAME, False, t)
     return t - 0.02  # time of last speech frame
 
 
@@ -28,9 +31,9 @@ def test_silence_detector_commits_after_threshold() -> None:
 
 def test_no_commit_without_speech_or_while_speaking() -> None:
     d = SilenceEndpointDetector()
-    d.observe_audio(False, 0)
+    d.observe_audio(FRAME, False, 0)
     assert not d.should_commit(10)
-    d.observe_audio(True, 11)
+    d.observe_audio(FRAME, True, 11)
     assert not d.should_commit(20)
 
 

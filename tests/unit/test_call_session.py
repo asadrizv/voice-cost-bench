@@ -11,6 +11,7 @@ from enum import Enum
 import pytest
 
 from backend.application.dto.call_context import CallContext
+from backend.application.ports.endpoint_detector import EndpointDetector
 from backend.application.ports.pipeline_provider import Pipeline
 from backend.application.services.endpointing import SilenceEndpointDetector
 from backend.application.use_cases.call_session import CallSession, SessionConfig
@@ -54,7 +55,10 @@ class Caller:
 
 
 async def make_session(
-    world: World, kind: PipelineKind = PipelineKind.API, config: SessionConfig | None = None
+    world: World,
+    kind: PipelineKind = PipelineKind.API,
+    config: SessionConfig | None = None,
+    endpointer: EndpointDetector | None = None,
 ) -> tuple[CallSession, RecordingOutput, CallContext]:
     ctx = await world.start_call.execute(kind, "law_firm")
     out = RecordingOutput()
@@ -63,7 +67,7 @@ async def make_session(
         world.handle_turn,
         world.end_call,
         ByteVad(),
-        SilenceEndpointDetector(silence_ms=700),
+        endpointer or SilenceEndpointDetector(silence_ms=700),
         out,
         world.clock,
         world.metrics,
@@ -339,6 +343,40 @@ async def test_endpointer_hears_what_the_agent_said() -> None:
     caller.session = session
     await session.run(caller.frames())
     assert [h.strip() for h in heard] == [ctx.persona.greeting, "May I have your email?"]
+
+
+class FrameRecordingEndpointer(SilenceEndpointDetector):
+    def __init__(self) -> None:
+        super().__init__(silence_ms=700)
+        self.observed: list[tuple[AudioChunk, bool]] = []
+
+    def observe_audio(self, frame: AudioChunk, is_speech: bool, now: float) -> None:
+        self.observed.append((frame, is_speech))
+        super().observe_audio(frame, is_speech, now)
+
+
+async def test_endpointer_receives_each_caller_frame_with_its_speech_flag() -> None:
+    world = make_world(utterances=["Hello."])
+    endpointer = FrameRecordingEndpointer()
+    session, _, _ = await make_session(world, endpointer=endpointer)
+    sent: list[AudioChunk] = []
+
+    async def frames() -> AsyncIterator[AudioChunk]:
+        while session.agent_busy:
+            sent.append(silence())
+            yield sent[-1]
+            world.clock.advance(FRAME_S)
+            await asyncio.sleep(0)
+        for chunk in [speech(), speech(), silence()]:
+            sent.append(chunk)
+            yield chunk
+            world.clock.advance(FRAME_S)
+            await asyncio.sleep(0)
+
+    await session.run(frames())
+    assert [frame for frame, _ in endpointer.observed] == sent
+    assert all(o is s for (o, _), s in zip(endpointer.observed, sent, strict=True))
+    assert [flag for _, flag in endpointer.observed[-3:]] == [True, True, False]
 
 
 async def test_llm_prompt_is_prewarmed_with_the_first_turns_prefix() -> None:

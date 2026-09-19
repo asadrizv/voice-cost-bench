@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from backend.application.ports.stt_port import TranscriptEvent
+from backend.domain.value_objects.audio import AudioChunk
 
 
 class EndpointDetector(Protocol):
@@ -11,7 +12,10 @@ class EndpointDetector(Protocol):
 
     def reset(self) -> None: ...
 
-    def observe_audio(self, is_speech: bool, now: float) -> None: ...
+    def observe_audio(self, frame: AudioChunk, is_speech: bool, now: float) -> None:
+        """One caller frame, in arrival order, with the VAD's verdict on it. Detectors that
+        decide from timing alone may ignore `frame`; audio models read it."""
+        ...
 
     def observe_transcript(self, event: TranscriptEvent, now: float) -> None: ...
 
