@@ -86,6 +86,13 @@ class Container:
         )
 
 
+def validate_static_config(settings: Settings) -> None:
+    """For processes that build containers lazily (the agent builds one per call): fail at
+    startup on config that would otherwise fail every call. Raises the loaders' errors."""
+    YamlRateCardProvider(settings.rates_path)
+    YamlPersonaProvider(settings.personas_dir).validate_all()
+
+
 def build_repository(settings: Settings) -> CallRepository:
     if settings.database_url:
         return SqlCallRepository.from_url(settings.database_url)

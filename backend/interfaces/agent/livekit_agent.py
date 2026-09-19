@@ -29,7 +29,7 @@ from backend.infrastructure.transport.livekit_audio import (
     LiveKitAudioOutput,
     caller_audio,
 )
-from backend.interfaces.container import build_container
+from backend.interfaces.container import build_container, validate_static_config
 from backend.interfaces.http.routes_token import AGENT_NAME
 
 log = logging.getLogger("voice-cost-bench.agent")
@@ -161,6 +161,7 @@ async def entrypoint(ctx: JobContext) -> None:
 
 def main() -> None:
     settings = get_settings()
+    validate_static_config(settings)
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,

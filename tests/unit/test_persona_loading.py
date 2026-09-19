@@ -83,3 +83,23 @@ def test_a_persona_without_disclosure_stops_the_service_from_starting(tmp_path: 
     )
     with pytest.raises(MissingAiDisclosure, match="front_desk.yaml"):
         build_container(Settings(database_url="", config_dir=config), NullMetrics())  # type: ignore[arg-type]
+
+
+def test_the_agent_worker_refuses_to_register_with_an_undisclosed_persona(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The agent builds its container per call, so without a startup check a bad persona
+    would leave a healthy-looking worker that fails every call."""
+    from backend.interfaces.agent import livekit_agent
+
+    config = tmp_path / "config"
+    shutil.copytree(REPO_ROOT / "config", config)
+    (config / "personas" / "front_desk.yaml").write_text(
+        'id: front_desk\nlanguage: en\ngreeting: "Hello, this is Clara."\nsystem_prompt: "Hi."\n'
+    )
+    registered: list[object] = []
+    monkeypatch.setattr(livekit_agent, "get_settings", lambda: Settings(config_dir=config))
+    monkeypatch.setattr(livekit_agent.cli, "run_app", registered.append)
+    with pytest.raises(MissingAiDisclosure, match="front_desk.yaml"):
+        livekit_agent.main()
+    assert registered == []
