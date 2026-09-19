@@ -21,7 +21,7 @@ from backend.infrastructure.simulated.gpu_model import SimulatedGpu, SimulatedGp
 from backend.interfaces.cli import loadtest
 from backend.interfaces.cli.harness import provenance, report
 from backend.interfaces.cli.harness.caller import Conversation, load_conversation
-from backend.interfaces.cli.harness.runner import LevelRunner
+from backend.interfaces.cli.harness.runner import LevelRun, LevelRunner
 from backend.interfaces.container import build_container
 from tests.fakes import NullMetrics
 
@@ -105,6 +105,15 @@ async def test_each_priced_carrier_gets_a_cost_row_differing_only_in_telephony()
     assert rows["telnyx"] == pytest.approx(
         summary["cost_per_minute_usd"] - telephony * (1 - 0.0032 / 0.014)
     )
+
+
+def test_a_level_where_every_call_failed_costs_nothing_under_any_carrier() -> None:
+    conversation = Conversation("intake_en", "law_firm", "en", ["Hello."], [[]])
+    twilio = TelephonyQuote("twilio", Decimal("0.014"), "https://x", "2026-09-17", True, True)
+
+    summary = report.summarise_level(LevelRun(2, 1.0, failed=2), conversation, True, [twilio])
+
+    assert summary["cost_per_minute_by_carrier_usd"] == {"twilio": 0.0}
 
 
 def test_breaking_point_is_first_level_over_budget() -> None:

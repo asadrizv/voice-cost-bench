@@ -73,7 +73,7 @@ def test_every_carrier_is_listed_with_its_source_and_whether_it_was_verified(
     assert (telnyx.per_minute_usd, telnyx.verified) == (Decimal("0.0032"), False)
     assert (telnyx.source_url, telnyx.checked_on) == ("https://example.com/telnyx", "2026-09-19")
     assert telnyx.note == "inbound local"
-    assert quotes["twilio"].verified
+    assert quotes["twilio"].verified and quotes["twilio"].note == ""
     assert quotes["sipgate"].per_minute_usd is None
     assert quotes["sipgate"].note == "flat monthly channels"
 
@@ -106,6 +106,13 @@ def without(entry: dict[str, Any], key: str) -> dict[str, Any]:
         (
             {"selected": "twilio", "carriers": {"twilio": without(TWILIO, "checked_on")}},
             "'twilio': needs checked_on",
+        ),
+        (
+            {
+                "selected": "twilio",
+                "carriers": {"twilio": without(without(TWILIO, "source"), "checked_on")},
+            },
+            "'twilio': needs source, checked_on",
         ),
         (
             {"selected": "twilio", "carriers": {"twilio": {**TWILIO, "verified": "yes"}}},
