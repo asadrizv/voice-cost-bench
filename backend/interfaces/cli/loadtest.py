@@ -22,6 +22,7 @@ from typing import Any
 
 from backend.application.ports.metrics_sink import MetricsSink
 from backend.application.services.endpointing import EndpointerKind
+from backend.application.use_cases.describe_components import DescribeComponents
 from backend.domain.value_objects.pipeline_kind import PipelineKind
 from backend.infrastructure.config.settings import REPO_ROOT, Settings, get_settings
 from backend.infrastructure.persistence.postgres_call_repository import SqlCallRepository
@@ -65,6 +66,13 @@ async def _sweep(args: argparse.Namespace) -> dict[str, Any]:
         levels = levels + [lv for lv in BEYOND_LEVELS if lv > max(levels)]
     ceiling = max(levels)
     container = _container(settings, args.forward, ceiling)
+    # A simulated run never touches the STT/TTS services, so asking them would record
+    # engines that took no part in the numbers.
+    describer = (
+        DescribeComponents(container.catalogue, None)
+        if simulated
+        else container.describe_components
+    )
     gpu = SimulatedGpu() if simulated else None
     runner = LevelRunner(container, kind, conversation, args.endpointer, simulated=gpu)
 
@@ -107,7 +115,8 @@ async def _sweep(args: argparse.Namespace) -> dict[str, Any]:
             args.endpointer,
             simulated,
             container.rates.raw(),
-            container.catalogue,
+            await describer.execute(kind),
+            container.catalogue.version(),
         ),
         "budgets_ms": report.budgets(),
         "levels": results,

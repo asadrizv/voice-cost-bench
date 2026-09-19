@@ -11,6 +11,7 @@ import pytest
 from backend.application.ports.component_catalogue import Component, ComponentKind
 from backend.application.services.concurrency_supervisor import ConcurrencySupervisor
 from backend.application.services.endpointing import EndpointerKind
+from backend.application.use_cases.describe_components import DescribedComponent
 from backend.domain.value_objects.pipeline_kind import PipelineKind
 from backend.infrastructure.config.settings import Settings
 from backend.infrastructure.persistence.inmemory_call_repository import InMemoryCallRepository
@@ -132,10 +133,11 @@ class OneStackCatalogue:
         ),
     ],
 )
-def test_provenance_names_the_components_from_the_catalogue(
+def test_provenance_records_what_ran_and_whether_it_was_confirmed(
     pipeline: str, kind: PipelineKind, model_facts: set[str]
 ) -> None:
     stt = Component(ComponentKind.STT, "acme", "Acme", "ears-2", "r9", "eu-west", "MIT", False, "")
+    tts = Component(ComponentKind.TTS, "voxy", "Voxy", "v1", "1", "eu-west", "MIT", False, "")
     conversation = Conversation("intake_en", "law_firm", "en", ["Hello."], [[]])
     settings = Settings(database_url="", vllm_base_url="http://127.0.0.1:9/v1")
 
@@ -146,7 +148,11 @@ def test_provenance_names_the_components_from_the_catalogue(
         EndpointerKind.SEMANTIC,
         simulated=True,
         rates_raw={"api": {"stt": {"model": "ears-2"}}},
-        catalogue=OneStackCatalogue(kind, [stt]),
+        components=[
+            DescribedComponent(stt, ""),
+            DescribedComponent(tts, "the tts service did not report what it runs"),
+        ],
+        catalogue_version=7,
     )
 
     assert info["component_catalogue_version"] == 7
@@ -161,7 +167,22 @@ def test_provenance_names_the_components_from_the_catalogue(
             "licence": "MIT",
             "leaves_eu": False,
             "assumption": "",
-        }
+            "confirmed": True,
+            "unconfirmed_reason": "",
+        },
+        {
+            "kind": "tts",
+            "id": "voxy",
+            "vendor": "Voxy",
+            "model": "v1",
+            "version": "1",
+            "region": "eu-west",
+            "licence": "MIT",
+            "leaves_eu": False,
+            "assumption": "",
+            "confirmed": False,
+            "unconfirmed_reason": "the tts service did not report what it runs",
+        },
     ]
     assert set(info["models"]) == model_facts
     assert "whisper" not in str(info["models"]) and "deepgram" not in str(info["models"])

@@ -10,9 +10,8 @@ from typing import Any
 
 import httpx
 
-from backend.application.ports.component_catalogue import ComponentCatalogue
 from backend.application.services.endpointing import EndpointerKind
-from backend.domain.value_objects.pipeline_kind import PipelineKind
+from backend.application.use_cases.describe_components import DescribedComponent
 from backend.infrastructure.config.settings import REPO_ROOT, Settings
 from backend.infrastructure.telemetry.nvml_gpu_telemetry import detect_gpu_telemetry
 from backend.interfaces.cli.harness.caller import Conversation
@@ -47,7 +46,8 @@ def collect(
     endpointer: EndpointerKind,
     simulated: bool,
     rates_raw: dict[str, Any],
-    catalogue: ComponentCatalogue,
+    components: list[DescribedComponent],
+    catalogue_version: int,
 ) -> dict[str, Any]:
     """Everything needed to reproduce or challenge a number, written with the number."""
     serving_path = settings.config_dir / settings.serving_config
@@ -73,12 +73,15 @@ def collect(
         "persona": conversation.persona,
         "persona_sha256": _sha256(settings.personas_dir / f"{conversation.persona}.yaml"),
         "endpointer": endpointer.value,
-        "component_catalogue_version": catalogue.version(),
+        "component_catalogue_version": catalogue_version,
         "components": [
-            {**asdict(c), "kind": c.kind.value}
-            for c in catalogue.components(
-                PipelineKind.API if pipeline == "api" else PipelineKind.SELFHOSTED
-            )
+            {
+                **asdict(d.component),
+                "kind": d.component.kind.value,
+                "confirmed": d.confirmed,
+                "unconfirmed_reason": d.unconfirmed_reason,
+            }
+            for d in components
         ],
         "harness_host": {
             "python": platform.python_version(),
