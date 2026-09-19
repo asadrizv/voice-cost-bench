@@ -6,7 +6,7 @@ minute** and **latency** for both:
 | | STT | LLM | TTS |
 |---|---|---|---|
 | `api` | Deepgram Nova-3 | GPT-4o-mini | ElevenLabs Flash v2.5 |
-| `selfhosted` | faster-whisper large-v3-turbo | Qwen3.5-9B on vLLM | Kokoro |
+| `selfhosted` | faster-whisper large-v3-turbo | Qwen3.5-9B on vLLM | Kokoro, or Qwen3-TTS for German |
 
 The self-hosted pipeline runs all three models on one L40S. The load harness finds the
 concurrency where its p95 latency breaks, and reports cost at stated utilisation.
@@ -24,7 +24,7 @@ simulated GPU model and the whole stack works end to end. You hear a tone instea
 voice, and every cost is fiction.
 
 **Fully local, real voices, no keys (Apple Silicon):** the self-hosted pipeline runs on the
-Mac itself: Qwen 3.5 9B via Ollama, Whisper via MLX, Kokoro on CPU.
+Mac itself: Qwen 3.5 9B via Ollama, Whisper via MLX, Kokoro on CPU and Qwen3-TTS via MLX.
 
 ```bash
 brew install ollama livekit && ollama pull qwen3.5:9b
@@ -33,7 +33,9 @@ uv sync --extra local
 
 Then run `ollama serve`, `livekit-server --dev`, the Whisper and Kokoro services
 (`WHISPER_BACKEND=mlx uv run --extra local uvicorn gpu.whisper_service.app:app --factory
---port 8001`, same for `gpu.kokoro_service` on 8002), and the API and agent with
+--port 8001`, and `TTS_ENGINES=kokoro,qwen3-tts uv run --extra local uvicorn
+gpu.kokoro_service.app:app --factory --port 8002`, which downloads ~3 GB of Qwen3-TTS
+weights the first time), and the API and agent with
 `LLM_SERVER=ollama VLLM_BASE_URL=http://localhost:11434/v1 VLLM_MODEL=qwen3.5:9b
 SELFHOSTED_ON_LOCAL_MACHINE=true`. Latency on a laptop is not a benchmark figure; the call
 screen says so.
@@ -139,9 +141,10 @@ make test-paid  # one real request per paid provider (cents)
 ```
 
 Contract suites run the same tests against both implementations of each port: Deepgram
-against a server speaking its protocol from fixtures, Whisper and Kokoro against the real
-service code with the model stubbed, and OpenAI and vLLM over recorded SSE. Test runs cost
-nothing.
+against a server speaking its protocol from fixtures, Whisper and both TTS engines against
+the real service code with the models stubbed, and OpenAI and vLLM over recorded SSE. Test
+runs cost nothing. Tests that need real weights skip unless those weights are already
+cached, so a clean checkout downloads nothing.
 
 ## Caveats to state in any client conversation
 
@@ -151,8 +154,9 @@ nothing.
   shared. It's identical on both sides, so it narrows the percentage saving. The selected
   carrier in `config/rates.yaml` (Twilio, $0.014/min) prices it; the benchmark also shows
   cost per minute under each other listed carrier. Telnyx and sipgate are unverified.
-- **Kokoro has no German voice.** German self-hosted TTS needs a multilingual model
-  (Chatterbox Multilingual, Orpheus) before any German comparison is fair.
+- **German self-hosted TTS runs on Apple Silicon only.** Kokoro has no German voice, so
+  the German persona uses Qwen3-TTS, which streams through mlx-audio. A CUDA backend is
+  still to come (#32), so a German comparison on the L40S is not yet fair.
 - **The WER corpus is synthetic speech** (`fixtures/wer/README.md`). It's fine for
   regression and head-to-head comparison, not for a published German WER.
 - **Quote loaded cost at a stated utilisation and concurrency**, never a bare per-minute

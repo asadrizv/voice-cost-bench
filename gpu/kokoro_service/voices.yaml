@@ -1,8 +1,9 @@
-# Qwen3-TTS VoiceDesign voices this service serves, addressed as `qwen3-tts:<id>`.
-# A voice is a description, not a recording: nobody's voice is cloned and no speaker
-# consent is involved. `language` must be one of the model's codec languages
-# (config.json: talker_config.codec_language_id), not an ISO code.
+# Qwen3-TTS VoiceDesign voices this service serves, addressed as `qwen3-tts:<id>`. A voice
+# is a description, not a cloned recording, so no speaker consent is involved.
 version: 1
+
+# `language` is one of the model's codec languages (config.json:
+# talker_config.codec_language_id), not an ISO code.
 
 voices:
   clara_de:

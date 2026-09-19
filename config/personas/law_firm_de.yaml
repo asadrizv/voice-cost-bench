@@ -8,7 +8,7 @@ sampling:
   enable_thinking: false
 voices:
   api: "pFZP5JQG7iQjIQuC4Bku"     # ElevenLabs "Lily", multilingual
-  selfhosted: "af_heart"          # Kokoro has no German voice; see README caveats
+  selfhosted: "qwen3-tts:clara_de"  # Qwen3-TTS VoiceDesign; Kokoro speaks no German
 available_slots:
   - "Dienstag um 10 Uhr"
   - "Dienstag um 15:30 Uhr"

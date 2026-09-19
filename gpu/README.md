@@ -42,9 +42,26 @@ docker compose -f gpu/docker-compose.gpu.yml up -d   # SERVING_CONFIG=<file in c
 containers' self-hosted traffic there; the default is the machine running compose.
 `make gpu-targets GPU_HOST=<ip or hostname>` points Prometheus at the same node.
 
+## TTS engines
+
+`kokoro_service` routes each request to an engine by its voice id: `<engine>:<voice>` goes
+to that engine, a bare id to Kokoro. `TTS_ENGINES` (default `kokoro`) says which engines a
+process loads; `GET /v1/info` reports them, and every engine listed in `SYNTHESIZERS` needs
+an entry in `config/components.yaml` or the API refuses to start.
+
+| Engine | Voices | Runtime |
+|---|---|---|
+| `kokoro` | Kokoro's own ids, e.g. `af_heart` | `kokoro` on CPU or CUDA |
+| `qwen3-tts` | `qwen3-tts:<id>` from `kokoro_service/voices.yaml` | mlx-audio, Apple Silicon only |
+
+Qwen3-TTS gives the German persona a German voice (`qwen3-tts:clara_de`). The voice is a
+written description fed to the VoiceDesign model, not a cloned recording, so no speaker
+consent is involved; edit `voices.yaml` to change how Clara sounds. Its weights are ~3 GB,
+so a deployment that leaves `TTS_ENGINES` alone never downloads them.
+
 ## Known gaps
 
-- **Kokoro has no German voice.** The German persona falls back to an English Kokoro voice
-  on the self-hosted pipeline, which is not a fair comparison. For German, swap
-  `kokoro_service` for a multilingual model (Chatterbox Multilingual or Orpheus) behind the
-  same `/v1/synthesize` contract and record the model in provenance.
+- **Qwen3-TTS runs on Apple Silicon only.** `qwen-tts` does not stream and pins an older
+  transformers, so streaming comes from mlx-audio, which needs Metal. The CUDA backend
+  (vLLM-Omni) is #32; until it lands, a GPU node can only serve German through Kokoro's
+  English voices.

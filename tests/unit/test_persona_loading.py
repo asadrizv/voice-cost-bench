@@ -6,6 +6,13 @@ import pytest
 from backend.infrastructure.config.personas import MissingAiDisclosure, YamlPersonaProvider
 from backend.infrastructure.config.settings import REPO_ROOT, Settings
 from backend.interfaces.container import build_container
+from gpu.kokoro_service.app import (
+    SYNTHESIZERS,
+    VOICES_PATH,
+    Qwen3TtsSynthesizer,
+    load_voices,
+    route,
+)
 from tests.fakes import NullMetrics
 
 
@@ -71,6 +78,16 @@ def test_both_languages_ship_a_persona() -> None:
 @pytest.mark.parametrize("persona_id", SHIPPED.available())
 def test_every_shipped_persona_loads_with_an_ai_disclosure(persona_id: str) -> None:
     assert SHIPPED.get(persona_id).id == persona_id
+
+
+def test_the_german_persona_asks_the_self_hosted_stack_for_a_german_voice() -> None:
+    """Kokoro speaks no German, so the German pitch rests on this voice reaching
+    Qwen3-TTS and on that voice being designed in German."""
+    engine, name = route(
+        SHIPPED.get("law_firm_de").voices["selfhosted"], [s.engine for s in SYNTHESIZERS]
+    )
+    assert engine == Qwen3TtsSynthesizer.engine
+    assert load_voices(VOICES_PATH)[name]["language"] == "german"
 
 
 def test_a_persona_without_disclosure_stops_the_service_from_starting(tmp_path: Path) -> None:
