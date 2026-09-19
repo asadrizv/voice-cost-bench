@@ -174,7 +174,7 @@ class StaticPipelines:
 PERSONA = Persona(
     id="test",
     language="en",
-    greeting="Good morning, Hartley and Associates. How can I help?",
+    greeting="Good morning, Hartley and Associates, this is the AI assistant. How can I help?",
     system_prompt="You are a receptionist.",
     voices={"api": "voice-a", "selfhosted": "af_heart"},
 )
