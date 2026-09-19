@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import BINARY, VARBINARY, LargeBinary, MetaData, TypeDecorator, text
 
 from backend.application.ports.call_repository import CallNotFound
 from backend.domain.entities.call import Call, CallStatus, Turn
@@ -17,6 +17,7 @@ from backend.domain.entities.cost import CostBreakdown, Money, UsageUnits
 from backend.domain.entities.latency import LatencyBreakdown
 from backend.domain.value_objects.pipeline_kind import PipelineKind
 from backend.infrastructure.persistence.inmemory_call_repository import InMemoryCallRepository
+from backend.infrastructure.persistence.models import Base
 from backend.infrastructure.persistence.postgres_call_repository import SqlCallRepository
 
 T0 = datetime(2026, 9, 18, 10, 0, tzinfo=UTC)
@@ -134,3 +135,20 @@ async def test_missing_call_raises(repo) -> None:  # type: ignore[no-untyped-def
         await repo.get("nope")
     with pytest.raises(CallNotFound):
         await repo.update(make_call("nope", PipelineKind.API))
+
+
+def binary_columns(metadata: MetaData) -> list[str]:
+    found = []
+    for table in metadata.sorted_tables:
+        for column in table.columns:
+            kind = column.type
+            if isinstance(kind, TypeDecorator):  # PickleType and friends store bytes
+                kind = kind.impl_instance
+            if isinstance(kind, LargeBinary | BINARY | VARBINARY):
+                found.append(f"{table.name}.{column.name}")
+    return found
+
+
+def test_no_persisted_table_can_hold_audio() -> None:
+    assert Base.metadata.sorted_tables
+    assert binary_columns(Base.metadata) == []
