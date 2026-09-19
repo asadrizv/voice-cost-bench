@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from pathlib import Path
 from typing import NamedTuple
 
 import httpx
@@ -16,7 +17,14 @@ from backend.application.ports.tts_port import TtsPort
 from backend.domain.value_objects.audio import PCM16_24K_MONO
 from backend.infrastructure.tts.elevenlabs_tts import ElevenLabsTts
 from backend.infrastructure.tts.kokoro_tts import KokoroTts
-from gpu.kokoro_service.app import Qwen3TtsSynthesizer, create_app, to_pcm16
+from gpu.kokoro_service.app import (
+    VOICES_PATH,
+    Qwen3TtsSynthesizer,
+    create_app,
+    enabled_synthesizers,
+    load_voices,
+    to_pcm16,
+)
 from tests.integration.servers import run_asgi
 
 SECONDS_PER_CHAR = 0.02
@@ -220,3 +228,43 @@ async def test_the_service_reports_every_engine_it_can_route_to() -> None:
         {"id": "kokoro", "model": "hexgrad/Kokoro-82M"},
         {"id": "qwen3-tts", "model": Qwen3TtsSynthesizer.model},
     ]
+
+
+@pytest.mark.parametrize(
+    ("setting", "engines"),
+    [
+        (None, ["kokoro"]),
+        ("qwen3-tts", ["qwen3-tts"]),
+        ("kokoro, qwen3-tts", ["kokoro", "qwen3-tts"]),
+    ],
+)
+def test_the_environment_says_which_engines_a_process_loads(
+    monkeypatch: pytest.MonkeyPatch, setting: str | None, engines: list[str]
+) -> None:
+    monkeypatch.delenv("TTS_ENGINES", raising=False)
+    if setting is not None:
+        monkeypatch.setenv("TTS_ENGINES", setting)
+    assert [s.engine for s in enabled_synthesizers()] == engines
+
+
+def test_an_engine_this_service_cannot_run_is_refused_at_startup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TTS_ENGINES", "kokoro,orpheus")
+    with pytest.raises(RuntimeError, match="orpheus"):
+        enabled_synthesizers()
+
+
+def test_the_shipped_voice_file_designs_a_german_voice() -> None:
+    """The description is the whole voice: VoiceDesign has no German preset to fall back
+    on, and an empty or mislabelled one gives a Chinese-accented Clara."""
+    clara = load_voices(VOICES_PATH)["clara_de"]
+    assert clara["language"] == "german"
+    assert "German" in clara["description"]
+
+
+def test_a_voice_file_with_no_voices_is_refused(tmp_path: Path) -> None:
+    empty = tmp_path / "voices.yaml"
+    empty.write_text("version: 1\nvoices: {}\n")
+    with pytest.raises(RuntimeError, match=str(empty)):
+        load_voices(empty)
