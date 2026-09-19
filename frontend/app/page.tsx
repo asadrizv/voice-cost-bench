@@ -34,7 +34,10 @@ export default function CallPage() {
   useEffect(() => {
     api
       .config()
-      .then((c) => setEnv({ local: Boolean(c.selfhosted_on_local_machine), simulated: Boolean(c.simulated) }))
+      .then((c) => {
+        setEnv({ local: Boolean(c.selfhosted_on_local_machine), simulated: Boolean(c.simulated) });
+        if (c.default_pipeline === "api" || c.default_pipeline === "selfhosted") setPipeline(c.default_pipeline);
+      })
       .catch(() => undefined);
   }, []);
 
