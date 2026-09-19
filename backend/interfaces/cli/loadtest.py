@@ -107,6 +107,7 @@ async def _sweep(args: argparse.Namespace) -> dict[str, Any]:
             args.endpointer,
             simulated,
             container.rates.raw(),
+            container.catalogue,
         ),
         "budgets_ms": report.budgets(),
         "levels": results,

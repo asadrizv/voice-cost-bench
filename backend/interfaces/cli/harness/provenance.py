@@ -3,14 +3,16 @@ from __future__ import annotations
 import hashlib
 import platform
 import subprocess
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import httpx
-import yaml
 
+from backend.application.ports.component_catalogue import ComponentCatalogue
 from backend.application.services.endpointing import EndpointerKind
+from backend.domain.value_objects.pipeline_kind import PipelineKind
 from backend.infrastructure.config.settings import REPO_ROOT, Settings
 from backend.infrastructure.telemetry.nvml_gpu_telemetry import detect_gpu_telemetry
 from backend.interfaces.cli.harness.caller import Conversation
@@ -45,10 +47,10 @@ def collect(
     endpointer: EndpointerKind,
     simulated: bool,
     rates_raw: dict[str, Any],
+    catalogue: ComponentCatalogue,
 ) -> dict[str, Any]:
     """Everything needed to reproduce or challenge a number, written with the number."""
     serving_path = settings.config_dir / settings.serving_config
-    serving = yaml.safe_load(serving_path.read_text()) if serving_path.is_file() else {}
     gpu = detect_gpu_telemetry().snapshot()
     info: dict[str, Any] = {
         "generated_at": datetime.now(UTC).isoformat(),
@@ -71,6 +73,13 @@ def collect(
         "persona": conversation.persona,
         "persona_sha256": _sha256(settings.personas_dir / f"{conversation.persona}.yaml"),
         "endpointer": endpointer.value,
+        "component_catalogue_version": catalogue.version(),
+        "components": [
+            {**asdict(c), "kind": c.kind.value}
+            for c in catalogue.components(
+                PipelineKind.API if pipeline == "api" else PipelineKind.SELFHOSTED
+            )
+        ],
         "harness_host": {
             "python": platform.python_version(),
             "machine": platform.machine(),
@@ -80,19 +89,13 @@ def collect(
     if pipeline == "api":
         api = rates_raw.get("api", {})
         info["models"] = {
-            "stt": f"deepgram {settings.deepgram_model}",
-            "llm": f"openai {settings.openai_model}",
-            "tts": f"elevenlabs {settings.elevenlabs_model}",
             "listed_in_rate_card": {k: v.get("model") for k, v in api.items()},
         }
     else:
         vllm_root = settings.vllm_base_url.rsplit("/v1", 1)[0]
         info["models"] = {
-            "llm": {"model": serving.get("model"), "revision": serving.get("revision")},
             "vllm_version": None if simulated else _probe(f"{vllm_root}/version"),
             "serving_config": settings.serving_config,
             "serving_config_sha256": _sha256(serving_path),
-            "stt": "faster-whisper (see whisper_service /health/deep)",
-            "tts": "kokoro (see kokoro_service /health/deep)",
         }
     return info

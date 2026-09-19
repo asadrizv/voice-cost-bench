@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from backend.application.ports.component_catalogue import Component, ComponentKind
 from backend.application.services.concurrency_supervisor import ConcurrencySupervisor
 from backend.application.services.endpointing import EndpointerKind
 from backend.domain.value_objects.pipeline_kind import PipelineKind
@@ -15,8 +16,8 @@ from backend.infrastructure.config.settings import Settings
 from backend.infrastructure.persistence.inmemory_call_repository import InMemoryCallRepository
 from backend.infrastructure.simulated.gpu_model import SimulatedGpu, SimulatedGpuProfile
 from backend.interfaces.cli import loadtest
-from backend.interfaces.cli.harness import report
-from backend.interfaces.cli.harness.caller import load_conversation
+from backend.interfaces.cli.harness import provenance, report
+from backend.interfaces.cli.harness.caller import Conversation, load_conversation
 from backend.interfaces.cli.harness.runner import LevelRunner
 from backend.interfaces.container import build_container
 from tests.fakes import NullMetrics
@@ -102,3 +103,56 @@ def test_harness_rejects_an_unknown_endpointer(capsys: pytest.CaptureFixture[str
         loadtest.main(["sweep", "--pipeline", "simulated", "--endpointer", "vibes"])
     assert exit_info.value.code == 2
     assert "--endpointer" in capsys.readouterr().err
+
+
+class OneStackCatalogue:
+    def __init__(self, kind: PipelineKind, components: list[Component]) -> None:
+        self._kind, self._components = kind, components
+
+    def version(self) -> int:
+        return 7
+
+    def components(self, kind: PipelineKind) -> list[Component]:
+        return self._components if kind is self._kind else []
+
+
+@pytest.mark.parametrize(
+    ("pipeline", "kind"),
+    [
+        ("api", PipelineKind.API),
+        ("selfhosted", PipelineKind.SELFHOSTED),
+        ("simulated", PipelineKind.SELFHOSTED),
+    ],
+)
+def test_provenance_names_the_components_from_the_catalogue(
+    pipeline: str, kind: PipelineKind
+) -> None:
+    stt = Component(ComponentKind.STT, "acme", "Acme", "ears-2", "r9", "eu-west", "MIT", False, "")
+    conversation = Conversation("intake_en", "law_firm", "en", ["Hello."], [[]])
+    settings = Settings(database_url="", vllm_base_url="http://127.0.0.1:9/v1")
+
+    info = provenance.collect(
+        settings,
+        pipeline,
+        conversation,
+        EndpointerKind.SEMANTIC,
+        simulated=True,
+        rates_raw={},
+        catalogue=OneStackCatalogue(kind, [stt]),
+    )
+
+    assert info["component_catalogue_version"] == 7
+    assert info["components"] == [
+        {
+            "kind": "stt",
+            "id": "acme",
+            "vendor": "Acme",
+            "model": "ears-2",
+            "version": "r9",
+            "region": "eu-west",
+            "licence": "MIT",
+            "leaves_eu": False,
+            "assumption": "",
+        }
+    ]
+    assert "whisper" not in str(info["models"]) and "deepgram" not in str(info["models"])
