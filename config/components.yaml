@@ -1,6 +1,8 @@
 # Every component that touches a call: served at GET /transparency, copied into provenance.
-# The running configuration picks each pipeline's entries (configured_components); a
-# configured entry missing here fails startup, as does repeating a configured model.
+# The running configuration picks each pipeline's entries (configured_components), except
+# self-hosted STT and TTS, named from what their services report at GET /v1/info. A
+# configured entry, or an engine a service can run (SELFHOSTED_ENGINES), missing here fails
+# startup, as does repeating a configured model.
 version: 1
 
 hosts:

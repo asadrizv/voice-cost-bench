@@ -48,13 +48,11 @@ class YamlComponentCatalogue:
             for pipeline, slots in selection.items()
         }
         self._engines = {
-            kind: {
-                engine_id: _resolve(
-                    PipelineKind.SELFHOSTED, kind, ConfiguredComponent(engine_id), entries, hosts
-                )
-                for engine_id in ids
-            }
+            (kind, engine_id): _resolve(
+                PipelineKind.SELFHOSTED, kind, ConfiguredComponent(engine_id), entries, hosts
+            )
             for kind, ids in engines.items()
+            for engine_id in ids
         }
 
     def version(self) -> int:
@@ -64,7 +62,7 @@ class YamlComponentCatalogue:
         return list(self._components[kind])
 
     def engine(self, kind: ComponentKind, engine_id: str) -> Component | None:
-        return self._engines.get(kind, {}).get(engine_id)
+        return self._engines.get((kind, engine_id))
 
 
 def _resolve(
