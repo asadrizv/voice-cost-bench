@@ -4,6 +4,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any
 
+from backend.application.ports.component_catalogue import Component
 from backend.application.use_cases.compare_pipelines import PipelineSummary
 from backend.application.use_cases.compute_call_cost import CallCostReport
 from backend.domain.entities.call import Call, Turn
@@ -22,6 +23,10 @@ def usage(u: UsageUnits) -> dict[str, float]:
 
 def rates(r: PipelineRates) -> dict[str, float]:
     return {k: float(v) for k, v in asdict(r).items()}
+
+
+def component(c: Component) -> dict[str, Any]:
+    return {**asdict(c), "kind": c.kind.value}
 
 
 def turn(t: Turn) -> dict[str, Any]:

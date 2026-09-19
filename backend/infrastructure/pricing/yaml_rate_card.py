@@ -39,6 +39,9 @@ class YamlRateCardProvider:
         gpu = self._raw["selfhosted"]["gpu"]
         return f"{gpu.get('provider', '')} {gpu.get('sku', '')} {gpu.get('region', '')}".strip()
 
+    def telephony_provider(self) -> str:
+        return str(self._raw["telephony"]["provider"])
+
     def raw(self) -> dict[str, Any]:
         return dict(self._raw)
 

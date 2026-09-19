@@ -181,3 +181,44 @@ async def test_deep_health_exercises_models(api) -> None:  # type: ignore[no-unt
     body = (await client.get("/health/deep", params={"pipeline": "api"})).json()
     assert body["status"] == "ok"
     assert set(body["checks"]) == {"database", "llm", "tts"}
+
+
+COMPONENT_FIELDS = {
+    "kind",
+    "id",
+    "vendor",
+    "model",
+    "version",
+    "region",
+    "licence",
+    "leaves_eu",
+    "assumption",
+}
+KINDS = ["telephony", "stt", "llm", "tts", "orchestration", "storage"]
+
+
+async def test_transparency_lists_every_component_of_both_pipelines(api) -> None:  # type: ignore[no-untyped-def]
+    client, _ = api
+    body = (await client.get("/transparency")).json()
+
+    assert set(body["pipelines"]) == {"api", "selfhosted"}
+    for components in body["pipelines"].values():
+        assert [c["kind"] for c in components] == KINDS
+        for c in components:
+            assert set(c) == COMPONENT_FIELDS
+            assert all(c[f] for f in COMPONENT_FIELDS - {"leaves_eu", "assumption"})
+            assert isinstance(c["leaves_eu"], bool)
+
+    api_stack = {c["kind"]: c for c in body["pipelines"]["api"]}
+    assert (api_stack["stt"]["vendor"], api_stack["stt"]["model"]) == ("Deepgram", "nova-3")
+    assert (api_stack["llm"]["vendor"], api_stack["llm"]["model"]) == ("OpenAI", "gpt-4o-mini")
+    assert api_stack["tts"]["model"] == "eleven_flash_v2_5"
+    assert api_stack["tts"]["licence"] == "proprietary" and api_stack["tts"]["leaves_eu"]
+
+    selfhosted = {c["kind"]: c for c in body["pipelines"]["selfhosted"]}
+    assert selfhosted["llm"]["model"] == "Qwen/Qwen3.5-9B"
+    assert selfhosted["llm"]["version"] == "c202236235762e1c871ad0ccb60c8ee5ba337b9a"
+    assert selfhosted["stt"]["id"] == "faster-whisper" and selfhosted["stt"]["licence"] == "MIT"
+    assert selfhosted["tts"]["licence"] == "Apache-2.0" and not selfhosted["tts"]["leaves_eu"]
+    assert selfhosted["orchestration"]["id"] == "livekit-cloud"
+    assert selfhosted["storage"]["id"] == "in-memory"

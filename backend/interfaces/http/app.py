@@ -19,6 +19,7 @@ from backend.interfaces.http import (
     routes_health,
     routes_metrics,
     routes_token,
+    routes_transparency,
 )
 
 
@@ -49,7 +50,14 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    for module in (routes_token, routes_calls, routes_metrics, routes_benchmark, routes_health):
+    for module in (
+        routes_token,
+        routes_calls,
+        routes_metrics,
+        routes_benchmark,
+        routes_health,
+        routes_transparency,
+    ):
         app.include_router(module.router)
     return app
 

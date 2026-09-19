@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     vllm_model: str = "voice-llm"
     llm_server: str = Field("vllm", description="vllm | ollama (laptop demo)")
     whisper_ws_url: str = "ws://localhost:8001/v1/stream"
+    whisper_backend: str = Field(
+        "faster-whisper",
+        description="faster-whisper | mlx; the same WHISPER_BACKEND the STT service reads",
+    )
     kokoro_url: str = "http://localhost:8002"
 
     database_url: str = ""
@@ -62,6 +66,10 @@ class Settings(BaseSettings):
     @property
     def rates_path(self) -> Path:
         return self.config_dir / "rates.yaml"
+
+    @property
+    def components_path(self) -> Path:
+        return self.config_dir / "components.yaml"
 
     @property
     def personas_dir(self) -> Path:

@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+import yaml
+
+from backend.application.ports.component_catalogue import ComponentKind
 from backend.application.ports.pipeline_provider import Pipeline
 from backend.domain.value_objects.pipeline_kind import PipelineKind
+from backend.infrastructure.config.component_catalogue import ConfiguredComponent, Selection
 from backend.infrastructure.config.settings import Settings
 from backend.infrastructure.llm.ollama_llm import OllamaLlm
 from backend.infrastructure.llm.openai_llm import OpenAILlm
@@ -52,8 +56,6 @@ def _selfhosted(s: Settings) -> Pipeline:
 
 def _simulated(kind: PipelineKind) -> Callable[[Settings], Pipeline]:
     def build(s: Settings) -> Pipeline:
-        import yaml
-
         from backend.infrastructure.simulated.gpu_model import (
             SimulatedGpu,
             SimulatedLlm,
@@ -94,3 +96,38 @@ class PipelineFactory:
         if kind not in self._cache:
             self._cache[kind] = self._builders[kind](self._settings)
         return self._cache[kind]
+
+
+def configured_components(s: Settings, telephony: str) -> Selection:
+    """The catalogue entry each pipeline slot uses under these settings, mirroring the
+    builders above: a new adapter or engine needs a line here and an entry in
+    components.yaml, or startup fails."""
+    shared = {
+        ComponentKind.TELEPHONY: ConfiguredComponent(telephony),
+        ComponentKind.ORCHESTRATION: ConfiguredComponent(
+            "livekit-cloud" if ".livekit.cloud" in s.livekit_url else "livekit-server"
+        ),
+        ComponentKind.STORAGE: ConfiguredComponent("postgres" if s.database_url else "in-memory"),
+    }
+    return {
+        PipelineKind.API: {
+            **shared,
+            ComponentKind.STT: ConfiguredComponent("deepgram", model=s.deepgram_model),
+            ComponentKind.LLM: ConfiguredComponent("openai", model=s.openai_model),
+            ComponentKind.TTS: ConfiguredComponent("elevenlabs", model=s.elevenlabs_model),
+        },
+        PipelineKind.SELFHOSTED: {
+            **shared,
+            ComponentKind.STT: ConfiguredComponent(s.whisper_backend),
+            ComponentKind.LLM: _selfhosted_llm(s),
+            ComponentKind.TTS: ConfiguredComponent("kokoro"),
+        },
+    }
+
+
+def _selfhosted_llm(s: Settings) -> ConfiguredComponent:
+    if s.llm_server == "ollama":
+        return ConfiguredComponent(f"ollama:{s.vllm_model}", model=s.vllm_model)
+    serving = yaml.safe_load((s.config_dir / s.serving_config).read_text())
+    model = str(serving["model"])
+    return ConfiguredComponent(f"vllm:{model}", model=model, version=str(serving["revision"]))

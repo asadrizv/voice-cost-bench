@@ -1,0 +1,145 @@
+# Every component that touches a call, served at GET /transparency and copied into
+# benchmark provenance. Which entry each pipeline uses is chosen by the running
+# configuration (PipelineFactory's configured_components); a configured entry missing
+# here fails startup.
+#
+# Values the configuration already holds are NOT repeated here and are rejected if they
+# are: API model names (DEEPGRAM_MODEL, OPENAI_MODEL, ELEVENLABS_MODEL), the self-hosted
+# LLM's model and revision (the serving config, or VLLM_MODEL under Ollama).
+#
+# `assumption` says, in words, which values are not verified against a contract or a
+# deployment. `host` points self-run components at a deployment below, which supplies
+# their region and leaves_eu.
+version: 1
+
+hosts:
+  gpu_host:
+    region: "gpu-host (see deployment)"
+    leaves_eu: false
+    assumption: >-
+      Runs wherever the GPU runs. leaves_eu assumes an EU host, as the priced RunPod L40S
+      (secure cloud, nl) is; on any other host this is false only if that host is in the EU.
+  app_host:
+    region: "app-host (see deployment)"
+    leaves_eu: false
+    assumption: >-
+      Runs beside the API and agent (docker compose or the operator's machine). leaves_eu
+      assumes that host is in the EU.
+
+components:
+  twilio:
+    kind: telephony
+    vendor: Twilio
+    model: Programmable Voice
+    version: vendor-managed
+    region: us
+    licence: proprietary
+    leaves_eu: true
+    assumption: >-
+      Priced in rates.yaml but not connected yet: calls arrive over WebRTC through
+      LiveKit. US region is Twilio's default without an EU edge contract.
+
+  deepgram:
+    kind: stt
+    vendor: Deepgram
+    version: vendor-managed
+    region: us
+    licence: proprietary
+    leaves_eu: true
+    assumption: Deepgram's default US endpoint; no EU endpoint is configured.
+  faster-whisper:
+    kind: stt
+    vendor: SYSTRAN faster-whisper (OpenAI Whisper weights)
+    model: large-v3-turbo
+    version: faster-whisper>=1.1
+    host: gpu_host
+    licence: MIT
+    assumption: model is whisper_service's default; WHISPER_MODEL on the GPU host overrides it.
+  mlx:
+    kind: stt
+    vendor: MLX Whisper (OpenAI Whisper weights)
+    model: mlx-community/whisper-large-v3-turbo
+    version: mlx-whisper>=0.4
+    host: gpu_host
+    licence: MIT
+    assumption: model is whisper_service's default; WHISPER_MLX_REPO overrides it.
+
+  openai:
+    kind: llm
+    vendor: OpenAI
+    version: vendor-managed
+    region: us
+    licence: proprietary
+    leaves_eu: true
+    assumption: OpenAI's default US endpoint; no EU data residency is configured.
+  vllm:Qwen/Qwen3.5-9B:
+    kind: llm
+    vendor: Alibaba Cloud Qwen, served by vLLM
+    host: gpu_host
+    licence: see model card
+    assumption: Licence not verified here; read the Qwen3.5-9B model card at the pinned revision.
+  vllm:meta-llama/Llama-3.1-8B-Instruct:
+    kind: llm
+    vendor: Meta Llama, served by vLLM
+    host: gpu_host
+    licence: Llama 3.1 Community License
+  ollama:qwen3.5:9b:
+    kind: llm
+    vendor: Alibaba Cloud Qwen, served by Ollama
+    version: ollama library tag
+    host: gpu_host
+    licence: see model card
+    assumption: Licence not verified here; read the Qwen3.5-9B model card.
+
+  elevenlabs:
+    kind: tts
+    vendor: ElevenLabs
+    version: vendor-managed
+    region: us
+    licence: proprietary
+    leaves_eu: true
+    assumption: ElevenLabs' default US endpoint; no EU data residency is configured.
+  kokoro:
+    kind: tts
+    vendor: hexgrad Kokoro
+    model: Kokoro-82M
+    version: kokoro>=0.9.4
+    host: gpu_host
+    licence: Apache-2.0
+
+  livekit-server:
+    kind: orchestration
+    vendor: LiveKit server (self-run)
+    model: livekit-server
+    version: v1.13.7
+    host: app_host
+    licence: Apache-2.0
+    assumption: version is the docker compose image; a native livekit-server may differ.
+  livekit-cloud:
+    kind: orchestration
+    vendor: LiveKit Cloud
+    model: managed SFU
+    version: vendor-managed
+    region: global (nearest edge)
+    licence: proprietary
+    leaves_eu: true
+    assumption: LiveKit Cloud routes media through its nearest edge; no EU-only region is configured.
+
+  postgres:
+    kind: storage
+    vendor: PostgreSQL
+    model: postgres
+    version: "16"
+    host: app_host
+    licence: PostgreSQL License
+    assumption: >-
+      version is the docker compose image. Stores transcripts, latency and cost; never
+      audio.
+  in-memory:
+    kind: storage
+    vendor: none (process memory)
+    model: in-memory repository
+    version: n/a
+    host: app_host
+    licence: n/a
+    assumption: Nothing persists; call records vanish when the API restarts.

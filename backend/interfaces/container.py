@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from backend.application.dto.call_context import CallContext
 from backend.application.ports.audio_output import AudioOutput
 from backend.application.ports.call_repository import CallRepository
+from backend.application.ports.component_catalogue import ComponentCatalogue
 from backend.application.ports.endpoint_detector import EndpointDetector
 from backend.application.ports.metrics_sink import MetricsSink
 from backend.application.ports.pipeline_provider import PipelineProvider
@@ -24,11 +25,12 @@ from backend.application.use_cases.handle_call_turn import HandleCallTurn
 from backend.application.use_cases.start_call import StartCall
 from backend.domain.services.cost_calculator import CostCalculator
 from backend.domain.value_objects.pipeline_kind import PipelineKind
+from backend.infrastructure.config.component_catalogue import YamlComponentCatalogue
 from backend.infrastructure.config.personas import YamlPersonaProvider
 from backend.infrastructure.config.settings import Settings
 from backend.infrastructure.persistence.inmemory_call_repository import InMemoryCallRepository
 from backend.infrastructure.persistence.postgres_call_repository import SqlCallRepository
-from backend.infrastructure.pipeline_factory import PipelineFactory
+from backend.infrastructure.pipeline_factory import PipelineFactory, configured_components
 from backend.infrastructure.pricing.yaml_rate_card import YamlRateCardProvider
 from backend.infrastructure.system_clock import SystemClock
 from backend.infrastructure.vad.energy_vad import EnergyVad
@@ -50,6 +52,7 @@ class Container:
     clock: SystemClock
     repository: CallRepository
     rates: YamlRateCardProvider
+    catalogue: ComponentCatalogue
     calculator: CostCalculator
     personas: YamlPersonaProvider
     pipelines: PipelineProvider
@@ -92,8 +95,15 @@ class Container:
 def validate_static_config(settings: Settings) -> None:
     """For processes that build containers lazily (the agent builds one per call): fail at
     startup on config that would otherwise fail every call. Raises the loaders' errors."""
-    YamlRateCardProvider(settings.rates_path)
+    build_catalogue(settings, YamlRateCardProvider(settings.rates_path))
     YamlPersonaProvider(settings.personas_dir).validate_all()
+
+
+def build_catalogue(settings: Settings, rates: YamlRateCardProvider) -> YamlComponentCatalogue:
+    """Raises ComponentCatalogueError when a configured component has no complete entry."""
+    return YamlComponentCatalogue(
+        settings.components_path, configured_components(settings, rates.telephony_provider())
+    )
 
 
 def build_repository(settings: Settings) -> CallRepository:
@@ -112,6 +122,7 @@ def build_container(
     clock = SystemClock()
     repository = repository or build_repository(settings)
     rates = YamlRateCardProvider(settings.rates_path)
+    catalogue = build_catalogue(settings, rates)
     calculator = CostCalculator(rates.rate_card())
     personas = YamlPersonaProvider(settings.personas_dir)
     personas.validate_all()
@@ -126,6 +137,7 @@ def build_container(
         clock=clock,
         repository=repository,
         rates=rates,
+        catalogue=catalogue,
         calculator=calculator,
         personas=personas,
         pipelines=pipelines,
