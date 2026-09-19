@@ -104,6 +104,7 @@ def build_container(
     rates = YamlRateCardProvider(settings.rates_path)
     calculator = CostCalculator(rates.rate_card())
     personas = YamlPersonaProvider(settings.personas_dir)
+    personas.validate_all()
     pipelines = pipelines or PipelineFactory(settings)
     supervisors = (
         supervisors

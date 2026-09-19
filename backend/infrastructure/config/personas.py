@@ -39,6 +39,12 @@ class YamlPersonaProvider:
     def available(self) -> list[str]:
         return sorted(p.stem for p in self._dir.glob("*.yaml"))
 
+    def validate_all(self) -> None:
+        """Loads every persona so a non-compliant one fails at startup. Raises
+        MissingAiDisclosure (or ValueError) naming the file."""
+        for persona_id in self.available():
+            self.get(persona_id)
+
 
 def _load(path: Path) -> Persona:
     raw = yaml.safe_load(path.read_text())

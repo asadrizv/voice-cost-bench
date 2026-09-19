@@ -1,8 +1,12 @@
+import shutil
 from pathlib import Path
 
 import pytest
 
 from backend.infrastructure.config.personas import MissingAiDisclosure, YamlPersonaProvider
+from backend.infrastructure.config.settings import REPO_ROOT, Settings
+from backend.interfaces.container import build_container
+from tests.fakes import NullMetrics
 
 
 def _write_persona(directory: Path, language: str | None, greeting: str) -> None:
@@ -67,3 +71,15 @@ def test_both_languages_ship_a_persona() -> None:
 @pytest.mark.parametrize("persona_id", SHIPPED.available())
 def test_every_shipped_persona_loads_with_an_ai_disclosure(persona_id: str) -> None:
     assert SHIPPED.get(persona_id).id == persona_id
+
+
+def test_a_persona_without_disclosure_stops_the_service_from_starting(tmp_path: Path) -> None:
+    """Deployment, not the first call, is where this must fail: at call time the caller
+    only hears silence and the operator only sees an agent log line."""
+    config = tmp_path / "config"
+    shutil.copytree(REPO_ROOT / "config", config)
+    (config / "personas" / "front_desk.yaml").write_text(
+        'id: front_desk\nlanguage: en\ngreeting: "Hello, this is Clara."\nsystem_prompt: "Hi."\n'
+    )
+    with pytest.raises(MissingAiDisclosure, match="front_desk.yaml"):
+        build_container(Settings(database_url="", config_dir=config), NullMetrics())  # type: ignore[arg-type]
