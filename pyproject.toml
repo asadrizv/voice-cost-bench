@@ -40,6 +40,7 @@ dev = [
     "jiwer>=3.0",
     "pytest-timeout>=2.4.0",
     "pyjwt>=2.14.0",
+    "mutmut>=3",
 ]
 
 [build-system]
@@ -83,3 +84,9 @@ select = ["E", "F", "I", "B", "UP", "SIM", "ASYNC"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["ASYNC110"]  # tests poll fakes deliberately
+
+[tool.mutmut]
+source_paths = ["backend/", "gpu/"]
+also_copy = ["tests/", "config/", "fixtures/", "alembic.ini"]
+pytest_add_cli_args = ["-p", "no:cacheprovider", "--timeout", "60", "-q"]
+pytest_add_cli_args_test_selection = ["tests/unit", "tests/contract", "tests/integration"]
