@@ -184,8 +184,9 @@ def _agent_audio(*parts: tuple[float, float]) -> AudioChunk:
     [
         [_agent_audio((0.2, -60)), _agent_audio((0.04, -20))],
         [_agent_audio((0.2, -60), (0.04, -20))],
+        [_agent_audio((0.2, -46), (0.04, -44))],
     ],
-    ids=["separate chunks", "one chunk"],
+    ids=["separate chunks", "one chunk", "either side of -45 dBFS"],
 )
 async def test_near_silent_tts_lead_in_is_not_the_agent_speaking(chunks: list[AudioChunk]) -> None:
     clock = FakeClock()
@@ -211,6 +212,10 @@ async def test_a_turn_the_agent_never_answers_is_counted_unanswered_not_timed() 
     clock.advance(2.0)
     output.caller_speech_started()  # spoke again with no answer: the first turn is lost
     output.caller_speech_ended()
+    clock.advance(2.0)
+    output.caller_speech_started()  # and again; the agent talks over this utterance
+    await output.write(_agent_audio((0.2, -20)))
+    output.caller_speech_ended()
     clock.advance(0.3)
     await output.write(_agent_audio((0.5, -20)))
     await output.write(_agent_audio((0.5, -20)))
@@ -219,7 +224,7 @@ async def test_a_turn_the_agent_never_answers_is_counted_unanswered_not_timed() 
     output.caller_speech_ended()  # then hung up on
 
     assert output.caller_observed_ms == [pytest.approx(300)]
-    assert output.unanswered_turns == 2
+    assert output.unanswered_turns == 3
 
 
 def test_a_level_where_every_call_failed_costs_nothing_under_any_carrier() -> None:
@@ -236,14 +241,14 @@ def test_a_level_where_every_call_failed_costs_nothing_under_any_carrier() -> No
 
 def test_caller_observed_percentiles_summarise_every_timed_turn() -> None:
     conversation = Conversation("intake_en", "law_firm", "en", ["Hello."], [[]])
-    delays = [float(v) for v in range(100, 1100, 10)]
+    delays = [v + 0.04 for v in range(100, 1100, 10)]
     run = LevelRun(1, 1.0, caller_observed_ms=delays, unanswered_turns=4)
 
     summary = report.summarise_level(run, conversation, simulated=True)
 
     assert summary["caller_observed_p50_ms"] == 595.0
     assert summary["caller_observed_p95_ms"] == 1040.5
-    assert summary["caller_observed_p99_ms"] == 1080.1
+    assert summary["caller_observed_p99_ms"] == 1080.1  # 1080.14, to one decimal
     assert summary["caller_observed_turns"] == 100
     assert summary["caller_observed_unanswered"] == 4
 
