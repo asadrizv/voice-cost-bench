@@ -93,6 +93,8 @@ def collect(
         info["models"] = {
             "listed_in_rate_card": {k: v.get("model") for k, v in api.items()},
         }
+    elif settings.llm_server == "ollama":
+        info["models"] = {"llm_server": "ollama", "ollama_model": settings.vllm_model}
     else:
         vllm_root = settings.vllm_base_url.rsplit("/v1", 1)[0]
         info["models"] = {

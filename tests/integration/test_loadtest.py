@@ -447,3 +447,28 @@ async def test_the_caller_waits_for_an_answer_when_a_pause_splits_its_turn() -> 
     assert any(t.interrupted for t in call.turns), "the pause should split the first turn"
     assert run.unanswered_turns == 0
     assert all(t.latency is None for t in call.turns if t.interrupted and not t.agent_text)
+
+
+def test_provenance_of_an_ollama_run_records_no_vllm_serving_config() -> None:
+    """The laptop demo serves the LLM from Ollama; a vLLM model, revision and config hash in
+    its provenance would describe a server that took no part in the numbers."""
+    conversation = Conversation("intake_en", "law_firm", "en", ["Hello."], [[]])
+    settings = Settings(
+        database_url="",
+        llm_server="ollama",
+        vllm_model="qwen3.5:9b",
+        vllm_base_url="http://127.0.0.1:9/v1",
+    )
+
+    info = provenance.collect(
+        settings,
+        "selfhosted",
+        conversation,
+        EndpointerKind.SEMANTIC,
+        simulated=False,
+        rates_raw={},
+        components=[],
+        catalogue_version=1,
+    )
+
+    assert info["models"] == {"llm_server": "ollama", "ollama_model": "qwen3.5:9b"}
