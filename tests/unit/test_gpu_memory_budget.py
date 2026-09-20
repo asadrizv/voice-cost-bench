@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import shutil
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -26,13 +25,14 @@ from backend.infrastructure.config.component_catalogue import (
     ComponentCatalogueError,
     YamlComponentCatalogue,
 )
-from backend.infrastructure.config.settings import REPO_ROOT, Settings
+from backend.infrastructure.config.settings import Settings
 from backend.infrastructure.pricing.yaml_rate_card import YamlRateCardProvider
 from backend.interfaces.container import (
     build_catalogue,
     build_gpu_budget_check,
-    validate_static_config,
+    load_static_config,
 )
+from tests.config_fixtures import config_copy
 
 GPU = "L40S"
 
@@ -40,8 +40,7 @@ GPU = "L40S"
 def config_with(tmp_path: Path, utilisation: str | None, **figures: dict[str, Any]) -> Path:
     """The shipped configuration with the LLM's memory share, and any named component's
     memory figure, replaced. A share of None is removed from the serving config."""
-    config = tmp_path / "config"
-    shutil.copytree(REPO_ROOT / "config", config)
+    config = config_copy(tmp_path)
     serving = config / "serving" / "qwen-9b-l40s.yaml"
     served = yaml.safe_load(serving.read_text())
     if utilisation is None:
@@ -369,7 +368,7 @@ def test_startup_warns_when_the_configured_engines_overrun_the_card(
     settings = Settings(database_url="", config_dir=config_with(tmp_path, "0.95"))
 
     with caplog.at_level(logging.WARNING):
-        validate_static_config(settings)
+        load_static_config(settings)
 
     [warning] = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert warning.getMessage().startswith("GPU memory budget: L40S 48.00 GiB:")
@@ -383,7 +382,7 @@ def test_startup_says_nothing_when_the_configured_engines_fit(
     settings = Settings(database_url="", config_dir=config_with(tmp_path, "0.72"))
 
     with caplog.at_level(logging.WARNING):
-        validate_static_config(settings)
+        load_static_config(settings)
 
     assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
 

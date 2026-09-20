@@ -6,12 +6,13 @@ from __future__ import annotations
 import hashlib
 import statistics
 import time
-import wave
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+from backend.domain.value_objects.audio import PCM16_16K_MONO
+from backend.infrastructure.audio.wav import read_wav
 from backend.infrastructure.endpointing import smart_turn
 
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "audio"
@@ -45,9 +46,8 @@ def test_the_pinned_weights_are_the_published_int8_cpu_model() -> None:
 
 
 def pcm16(path: Path, fraction: float = 1.0) -> bytes:
-    with wave.open(str(path)) as f:
-        assert f.getframerate() == 16_000 and f.getnchannels() == 1
-        audio = f.readframes(f.getnframes())
+    audio, fmt = read_wav(path)
+    assert fmt == PCM16_16K_MONO
     return audio[: int(len(audio) * fraction) // 2 * 2]
 
 

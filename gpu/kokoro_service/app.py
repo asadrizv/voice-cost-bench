@@ -13,6 +13,7 @@ requests queue here, visibly (kokoro_waiting), instead of inside the GPU.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import os
 import threading
@@ -108,29 +109,40 @@ so this is three. Measured on an M-series Mac, time to first audio falls with th
 same ~1 s either way. Stopping at three frames leaves the streaming vocoder some context."""
 
 
-class Qwen3TtsSynthesizer:
+class DesignedVoices:
+    """What both Qwen3-TTS runtimes share: one engine id, and the written voice designs
+    from voices.yaml. Only the runtime that turns a design into audio differs, so a new
+    voice reaches both by being added to that file."""
+
+    engine = "qwen3-tts"
+
+    def __init__(self) -> None:
+        self._voices = load_voices(VOICES_PATH)
+        self.warmup_voice = next(iter(self._voices))
+
+    def speaks(self, voice: str) -> bool:
+        return voice in self._voices
+
+
+class Qwen3TtsSynthesizer(DesignedVoices):
     """Apple Silicon: Qwen3-TTS VoiceDesign through mlx-audio, which is the only Qwen3-TTS
     runtime that streams (the official qwen-tts package does not, and pins transformers
     4.57). Voices are written descriptions in voices.yaml, so no recording is cloned. The
     CUDA runtime for this engine is VllmOmniQwen3TtsSynthesizer; see gpu/README.md."""
 
-    engine = backend = "qwen3-tts"
+    backend = "qwen3-tts"
     model = os.environ.get("QWEN3_TTS_MODEL", "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit")
 
     def __init__(self) -> None:
         from mlx_audio.tts.utils import load_model
 
-        self._voices = load_voices(VOICES_PATH)
-        self.warmup_voice = next(iter(self._voices))
+        super().__init__()
         self._model = load_model(self.model)
         if self._model.sample_rate != SAMPLE_RATE:
             raise RuntimeError(
                 f"{self.model} synthesises at {self._model.sample_rate} Hz; "
                 f"this service's stream and its x-sample-rate header say {SAMPLE_RATE}"
             )
-
-    def speaks(self, voice: str) -> bool:
-        return voice in self._voices
 
     def synthesize(self, text: str, voice: str, speed: float) -> Iterator[np.ndarray]:
         design = self._voices[voice]
@@ -146,7 +158,7 @@ class Qwen3TtsSynthesizer:
             yield np.asarray(result.audio, dtype=np.float32)
 
 
-class VllmOmniQwen3TtsSynthesizer:
+class VllmOmniQwen3TtsSynthesizer(DesignedVoices):
     """CUDA: the same Qwen3-TTS VoiceDesign model, served by a vLLM-Omni process on the GPU
     and reached over its OpenAI-compatible speech API, so nothing here imports CUDA or holds
     the card. The voices are the same written descriptions; see gpu/README.md for the
@@ -164,7 +176,6 @@ class VllmOmniQwen3TtsSynthesizer:
     little-endian, which is what the RAW/PCM_16 encoder upstream writes it with and what
     vLLM-Omni's own client reads it as."""
 
-    engine = "qwen3-tts"
     backend = "qwen3-tts-vllm"
 
     def __init__(
@@ -176,16 +187,12 @@ class VllmOmniQwen3TtsSynthesizer:
         self.served_model = model or os.environ.get(
             "QWEN3_TTS_VLLM_MODEL", "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
         )
+        super().__init__()
         self.model = f"{self.served_model} (vLLM-Omni)"
-        self._voices = load_voices(VOICES_PATH)
-        self.warmup_voice = next(iter(self._voices))
         self.base_url = base_url or os.environ.get("QWEN3_TTS_VLLM_URL", "http://127.0.0.1:8004")
         self._client = client or httpx.Client(
             base_url=self.base_url, timeout=httpx.Timeout(30.0, connect=5.0)
         )
-
-    def speaks(self, voice: str) -> bool:
-        return voice in self._voices
 
     def synthesize(self, text: str, voice: str, speed: float) -> Iterator[np.ndarray]:
         if speed != 1.0:
@@ -224,7 +231,10 @@ def to_float32(pcm: bytes) -> np.ndarray:
     return np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32767.0
 
 
+@functools.cache
 def load_voices(path: Path) -> dict[str, dict[str, str]]:
+    """Cached: both Qwen3-TTS runtimes read the same file, and it cannot change under a
+    running service."""
     raw = yaml.safe_load(path.read_text())
     voices = {
         str(name): {"language": str(v["language"]), "description": str(v["description"])}
@@ -317,7 +327,9 @@ def create_app(
         # engine whose model answers over a socket is not waiting on a blocked event loop.
         loop = asyncio.get_running_loop()
         for factory in factories:
-            synth = factory()
+            # The factory loads the weights, so it belongs on the pool too: several GB read
+            # on the event loop leaves the service unable to answer /health while it runs.
+            synth = await loop.run_in_executor(state["pool"], factory)  # type: ignore[arg-type]
             synthesizers[synth.engine] = synth
             await loop.run_in_executor(state["pool"], warm_up, synth)  # type: ignore[arg-type]
         yield

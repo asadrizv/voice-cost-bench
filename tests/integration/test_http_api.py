@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import shutil
 from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -25,12 +25,13 @@ from backend.infrastructure.config.component_catalogue import (
 )
 from backend.infrastructure.config.settings import Settings
 from backend.infrastructure.pipeline_factory import SELFHOSTED_ENGINES
-from backend.interfaces.container import validate_static_config
+from backend.interfaces.container import load_static_config
 from backend.interfaces.http.app import create_app
 from gpu.kokoro_service.app import SYNTHESIZERS, KokoroSynthesizer
 from gpu.kokoro_service.app import create_app as kokoro_app
 from gpu.whisper_service.app import TRANSCRIBERS, FasterWhisperTranscriber
 from gpu.whisper_service.app import create_app as whisper_app
+from tests.config_fixtures import config_copy
 from tests.fakes import FakeClock, FakeLlm, FakeTts, RecordingOutput, ScriptedStt, StaticPipelines
 from tests.integration.servers import run_asgi
 
@@ -62,9 +63,24 @@ async def api() -> AsyncIterator[tuple[httpx.AsyncClient, object]]:
         }
     )
     app = create_app(SETTINGS, pipelines=pipelines)
+    async with client_for(app) as client:
+        yield client, app.state.container
+
+
+@asynccontextmanager
+async def client_for(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
+    """An HTTP client onto an app already built — for tests that keep one app across two
+    clients, where rebuilding it would throw away the container's caches."""
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client, app.state.container
+        yield client
+
+
+@asynccontextmanager
+async def api_client(settings: Settings) -> AsyncIterator[httpx.AsyncClient]:
+    """The API under these settings, served in-process with no pipelines behind it."""
+    async with client_for(create_app(settings, pipelines=StaticPipelines({}))) as client:
+        yield client
 
 
 async def make_call(container, kind: PipelineKind) -> str:  # type: ignore[no-untyped-def]
@@ -264,17 +280,8 @@ async def test_transparency_lists_every_component_of_both_pipelines(api) -> None
     assert selfhosted["storage"]["id"] == "in-memory"
 
 
-def config_copy(tmp_path: Path) -> Path:
-    config = tmp_path / "config"
-    shutil.copytree(SETTINGS.config_dir, config)
-    return config
-
-
 async def transparency_of(settings: Settings) -> dict[str, dict[str, dict[str, object]]]:
-    app = create_app(settings, pipelines=StaticPipelines({}))
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        body = (await client.get("/transparency")).json()
+    body = await transparency_body(settings)
     return {p: {c["kind"]: c for c in cs} for p, cs in body["pipelines"].items()}
 
 
@@ -379,11 +386,7 @@ async def serving(engines: list[dict[str, str]]) -> FastAPI:
 
 async def transparency_components(engines: list[dict[str, str]]) -> list[dict[str, object]]:
     async with run_asgi(await serving(engines)) as host:
-        settings = SETTINGS.model_copy(update={"kokoro_url": f"http://{host}"})
-        app = create_app(settings, pipelines=StaticPipelines({}))
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            body = (await client.get("/transparency")).json()
+        body = await transparency_body(SETTINGS.model_copy(update={"kokoro_url": f"http://{host}"}))
     return [c for c in body["pipelines"]["selfhosted"] if c["kind"] == "tts"]
 
 
@@ -472,10 +475,10 @@ async def test_a_service_report_is_reused_for_a_minute() -> None:
     async with run_asgi(whisper_app(lambda: transcriber, workers=1)) as host:
         settings = SETTINGS.model_copy(update={"whisper_ws_url": f"ws://{host}/v1/stream"})
         app = create_app(settings, pipelines=StaticPipelines({}))
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with client_for(app) as client:
             first = (await client.get("/transparency")).json()
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    # The same app, so the same container: a second client must not re-probe the service.
+    async with client_for(app) as client:
         after_the_service_stopped = (await client.get("/transparency")).json()
 
     for body in (first, after_the_service_stopped):
@@ -484,9 +487,7 @@ async def test_a_service_report_is_reused_for_a_minute() -> None:
 
 
 async def test_an_unreachable_service_leaves_its_default_listed_but_unconfirmed() -> None:
-    app = create_app(SETTINGS, pipelines=StaticPipelines({}))
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with api_client(SETTINGS) as client:
         response = await client.get("/transparency")
 
     assert response.status_code == 200
@@ -547,7 +548,7 @@ def test_a_configured_component_without_a_complete_catalogue_entry_fails_startup
     settings = SETTINGS.model_copy(update={"config_dir": config, **update})
 
     with pytest.raises(ComponentCatalogueError, match=named):
-        validate_static_config(settings)
+        load_static_config(settings)
     with pytest.raises(ComponentCatalogueError, match=named):
         create_app(settings, pipelines=StaticPipelines({}))
 
@@ -562,11 +563,7 @@ async def test_config_lists_every_carrier_and_the_selected_one_prices_telephony(
 ) -> None:
     config = config_copy(tmp_path)
     select_carrier(config, "telnyx")
-    app = create_app(
-        SETTINGS.model_copy(update={"config_dir": config}), pipelines=StaticPipelines({})
-    )
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with api_client(SETTINGS.model_copy(update={"config_dir": config})) as client:
         body = (await client.get("/config")).json()
         transparency = (await client.get("/transparency")).json()
 
@@ -708,7 +705,7 @@ def test_the_eu_only_profile_refuses_to_start_naming_every_component_that_leaves
 ) -> None:
     settings = eu_settings(eu_config(tmp_path, carrier, edit), **update)
 
-    for start in (validate_static_config, lambda s: create_app(s, pipelines=StaticPipelines({}))):
+    for start in (load_static_config, lambda s: create_app(s, pipelines=StaticPipelines({}))):
         with pytest.raises(NotEuResident) as raised:
             start(settings)
         message = str(raised.value)
@@ -721,14 +718,12 @@ def test_a_deployment_without_the_profile_may_leave_the_eu(tmp_path: Path) -> No
     """The profile is opt-in: the shipped configuration keeps working untouched."""
     settings = SETTINGS.model_copy(update={"config_dir": config_copy(tmp_path)})
 
-    validate_static_config(settings)
+    load_static_config(settings)
     create_app(settings, pipelines=StaticPipelines({}))
 
 
 async def transparency_body(settings: Settings) -> dict[str, Any]:
-    app = create_app(settings, pipelines=StaticPipelines({}))
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with api_client(settings) as client:
         body: dict[str, Any] = (await client.get("/transparency")).json()
     return body
 
@@ -738,7 +733,7 @@ async def test_an_eu_only_deployment_starts_and_transparency_shows_nothing_leavi
 ) -> None:
     settings = eu_settings(eu_config(tmp_path))
 
-    validate_static_config(settings)
+    load_static_config(settings)
     body = await transparency_body(settings)
 
     assert body["eu_only"] is True
@@ -770,9 +765,7 @@ async def test_a_caller_cannot_ask_for_a_pipeline_the_eu_only_profile_refused(
 ) -> None:
     """The browser picks a pipeline per call, so the profile has to close that choice:
     otherwise a toggle would route the caller straight to the vendors it refused."""
-    app = create_app(eu_settings(eu_config(tmp_path)), pipelines=StaticPipelines({}))
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with api_client(eu_settings(eu_config(tmp_path))) as client:
         refused = await client.post("/token", json={"pipeline": "api"})
         allowed = await client.post("/token", json={"pipeline": "selfhosted"})
         default = await client.post("/token", json={})
@@ -802,7 +795,7 @@ def test_the_eu_only_profile_has_no_pipeline_to_fall_back_on_when_the_card_overr
     settings = eu_settings(over_committed(eu_config(tmp_path)))
 
     with caplog.at_level(logging.WARNING):
-        validate_static_config(settings)
+        load_static_config(settings)
 
     [record] = [r for r in caplog.records if r.levelno >= logging.WARNING]
     assert record.levelno == logging.ERROR
@@ -816,7 +809,7 @@ def test_a_deployment_without_the_profile_only_warns_about_the_same_card(
     settings = SETTINGS.model_copy(update={"config_dir": over_committed(eu_config(tmp_path))})
 
     with caplog.at_level(logging.WARNING):
-        validate_static_config(settings)
+        load_static_config(settings)
 
     [record] = [r for r in caplog.records if r.levelno >= logging.WARNING]
     assert record.levelno == logging.WARNING
@@ -829,7 +822,7 @@ def test_the_eu_only_error_names_every_offender_in_one_sentence(tmp_path: Path) 
     settings = eu_settings(eu_config(tmp_path, "twilio"), pipeline=PipelineKind.API)
 
     with pytest.raises(NotEuResident) as raised:
-        validate_static_config(settings)
+        load_static_config(settings)
 
     assert str(raised.value) == (
         "EU_ONLY is set, but these components leave the EU: "
@@ -849,7 +842,7 @@ def test_an_unproven_card_stays_a_warning_even_under_the_eu_only_profile(
     )
 
     with caplog.at_level(logging.WARNING):
-        validate_static_config(settings)
+        load_static_config(settings)
 
     [record] = [r for r in caplog.records if r.levelno >= logging.WARNING]
     assert record.levelno == logging.WARNING

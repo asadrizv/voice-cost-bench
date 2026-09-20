@@ -7,6 +7,7 @@ import hashlib
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -27,7 +28,12 @@ from backend.interfaces.cli import loadtest
 from backend.interfaces.cli.harness import provenance, report
 from backend.interfaces.cli.harness.caller import Conversation, load_conversation
 from backend.interfaces.cli.harness.runner import LevelRun, LevelRunner
-from backend.interfaces.container import build_catalogue, build_container, build_gpu_budget_check
+from backend.interfaces.container import (
+    Container,
+    build_catalogue,
+    build_container,
+    build_gpu_budget_check,
+)
 from tests.fakes import FakeClock, NullMetrics
 
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
@@ -36,23 +42,44 @@ needs_audio = pytest.mark.skipif(
 )
 
 
-@needs_audio
-async def test_level_run_produces_costed_timed_calls() -> None:
-    conversation = load_conversation(FIXTURES, "intake_en")
-    conversation = replace(
-        conversation, turns=conversation.turns[1:2], audio=conversation.audio[1:2]
-    )
-    supervisor = ConcurrencySupervisor(ceiling=3)
-    container = build_container(
+def one_turn(name: str = "intake_en") -> Conversation:
+    """One turn of a fixture conversation: enough to exercise a level, short enough that a
+    test of it still runs in a second."""
+    conversation = load_conversation(FIXTURES, name)
+    return replace(conversation, turns=conversation.turns[1:2], audio=conversation.audio[1:2])
+
+
+def local_container(**overrides: Any) -> Container:
+    """A container with nothing outside the process behind it."""
+    return build_container(
         Settings(database_url=""),
         NullMetrics(),  # type: ignore[arg-type]
         repository=InMemoryCallRepository(),
-        supervisors={PipelineKind.SELFHOSTED: supervisor},
+        **overrides,
     )
-    gpu = SimulatedGpu(SimulatedGpuProfile(speech_s_per_char=0.01))
-    runner = LevelRunner(
-        container, PipelineKind.SELFHOSTED, conversation, EndpointerKind.SEMANTIC, gpu
+
+
+def level_runner(
+    container: Container,
+    conversation: Conversation,
+    endpointer: EndpointerKind = EndpointerKind.SEMANTIC,
+    profile: SimulatedGpuProfile | None = None,
+) -> LevelRunner:
+    return LevelRunner(
+        container,
+        PipelineKind.SELFHOSTED,
+        conversation,
+        endpointer,
+        SimulatedGpu(profile or SimulatedGpuProfile(speech_s_per_char=0.01)),
     )
+
+
+@needs_audio
+async def test_level_run_produces_costed_timed_calls() -> None:
+    conversation = one_turn()
+    supervisor = ConcurrencySupervisor(ceiling=3)
+    container = local_container(supervisors={PipelineKind.SELFHOSTED: supervisor})
+    runner = level_runner(container, conversation)
 
     run = await runner.run(concurrency=3, duration_s=1)
 
@@ -92,20 +119,9 @@ async def test_level_run_produces_costed_timed_calls() -> None:
 
 @needs_audio
 async def test_each_priced_carrier_gets_a_cost_row_differing_only_in_telephony() -> None:
-    conversation = load_conversation(FIXTURES, "intake_en")
-    conversation = replace(
-        conversation, turns=conversation.turns[1:2], audio=conversation.audio[1:2]
-    )
-    container = build_container(
-        Settings(database_url=""),
-        NullMetrics(),  # type: ignore[arg-type]
-        repository=InMemoryCallRepository(),
-        supervisors={PipelineKind.SELFHOSTED: ConcurrencySupervisor(ceiling=2)},
-    )
-    gpu = SimulatedGpu(SimulatedGpuProfile(speech_s_per_char=0.01))
-    runner = LevelRunner(
-        container, PipelineKind.SELFHOSTED, conversation, EndpointerKind.SEMANTIC, gpu
-    )
+    conversation = one_turn()
+    container = local_container(supervisors={PipelineKind.SELFHOSTED: ConcurrencySupervisor(2)})
+    runner = level_runner(container, conversation)
     double = TelephonyQuote("double", Decimal("0.028"), "https://x", "2026-09-19", False, False)
     carriers = [*container.rates.telephony_quotes(), double]
 
@@ -137,11 +153,7 @@ async def test_caller_observed_delay_matches_a_pipeline_of_known_latency() -> No
         ["My name is Anna Weber.", "It's a tenancy issue."],
         [_tone_utterance(1.0, 0.2), _tone_utterance(0.6, 0.2)],
     )
-    container = build_container(
-        Settings(database_url=""),
-        NullMetrics(),  # type: ignore[arg-type]
-        repository=InMemoryCallRepository(),
-    )
+    container = local_container()
     after_commit_ms = 300 + 100  # LLM first token + TTS first byte; STT and decode free
     gpu = SimulatedGpu(
         SimulatedGpuProfile(
@@ -424,11 +436,7 @@ async def test_the_caller_waits_for_an_answer_when_a_pause_splits_its_turn() -> 
         ["It's a tenancy issue.", "He's refusing to return my deposit.", "No deadline."],
         [paused, _tone_utterance(0.8, 0.2)],
     )
-    container = build_container(
-        Settings(database_url=""),
-        NullMetrics(),  # type: ignore[arg-type]
-        repository=InMemoryCallRepository(),
-    )
+    container = local_container()
     gpu = SimulatedGpu(
         SimulatedGpuProfile(
             stt_final_ms=0,
@@ -481,21 +489,12 @@ def test_provenance_of_an_ollama_run_records_no_vllm_serving_config() -> None:
 
 @needs_audio
 async def test_a_level_runs_with_smart_turn_and_reports_what_its_decisions_cost() -> None:
-    conversation = load_conversation(FIXTURES, "intake_en")
-    conversation = replace(
-        conversation, turns=conversation.turns[1:2], audio=conversation.audio[1:2]
-    )
-    container = build_container(
-        Settings(database_url=""),
-        NullMetrics(),  # type: ignore[arg-type]
-        repository=InMemoryCallRepository(),
-        supervisors={PipelineKind.SELFHOSTED: ConcurrencySupervisor(ceiling=2)},
+    conversation = one_turn()
+    container = local_container(
+        supervisors={PipelineKind.SELFHOSTED: ConcurrencySupervisor(2)},
         turn_model=lambda audio: 0.9,
     )
-    gpu = SimulatedGpu(SimulatedGpuProfile(speech_s_per_char=0.01))
-    runner = LevelRunner(
-        container, PipelineKind.SELFHOSTED, conversation, EndpointerKind.SMART_TURN, gpu
-    )
+    runner = level_runner(container, conversation, EndpointerKind.SMART_TURN)
 
     run = await runner.run(concurrency=2, duration_s=1)
 

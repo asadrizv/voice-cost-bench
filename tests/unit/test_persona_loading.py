@@ -1,10 +1,9 @@
-import shutil
 from pathlib import Path
 
 import pytest
 
 from backend.infrastructure.config.personas import MissingAiDisclosure, YamlPersonaProvider
-from backend.infrastructure.config.settings import REPO_ROOT, Settings
+from backend.infrastructure.config.settings import Settings
 from backend.interfaces.container import build_container
 from gpu.kokoro_service.app import (
     SYNTHESIZERS,
@@ -13,6 +12,7 @@ from gpu.kokoro_service.app import (
     load_voices,
     route,
 )
+from tests.config_fixtures import config_copy
 from tests.fakes import NullMetrics
 
 
@@ -90,14 +90,19 @@ def test_the_german_persona_asks_the_self_hosted_stack_for_a_german_voice() -> N
     assert load_voices(VOICES_PATH)[name]["language"] == "german"
 
 
-def test_a_persona_without_disclosure_stops_the_service_from_starting(tmp_path: Path) -> None:
-    """Deployment, not the first call, is where this must fail: at call time the caller
-    only hears silence and the operator only sees an agent log line."""
-    config = tmp_path / "config"
-    shutil.copytree(REPO_ROOT / "config", config)
+def undisclosed_config(tmp_path: Path) -> Path:
+    """The shipped config with one persona whose greeting never says it is an AI."""
+    config = config_copy(tmp_path)
     (config / "personas" / "front_desk.yaml").write_text(
         'id: front_desk\nlanguage: en\ngreeting: "Hello, this is Clara."\nsystem_prompt: "Hi."\n'
     )
+    return config
+
+
+def test_a_persona_without_disclosure_stops_the_service_from_starting(tmp_path: Path) -> None:
+    """Deployment, not the first call, is where this must fail: at call time the caller
+    only hears silence and the operator only sees an agent log line."""
+    config = undisclosed_config(tmp_path)
     with pytest.raises(MissingAiDisclosure, match="front_desk.yaml"):
         build_container(Settings(database_url="", config_dir=config), NullMetrics())  # type: ignore[arg-type]
 
@@ -109,11 +114,7 @@ def test_the_agent_worker_refuses_to_register_with_an_undisclosed_persona(
     would leave a healthy-looking worker that fails every call."""
     from backend.interfaces.agent import livekit_agent
 
-    config = tmp_path / "config"
-    shutil.copytree(REPO_ROOT / "config", config)
-    (config / "personas" / "front_desk.yaml").write_text(
-        'id: front_desk\nlanguage: en\ngreeting: "Hello, this is Clara."\nsystem_prompt: "Hi."\n'
-    )
+    config = undisclosed_config(tmp_path)
     registered: list[object] = []
     monkeypatch.setattr(livekit_agent, "get_settings", lambda: Settings(config_dir=config))
     monkeypatch.setattr(livekit_agent.cli, "run_app", registered.append)

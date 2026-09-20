@@ -144,7 +144,11 @@ class TranscriptionSession(Protocol):
     and must not block; `advance` and `finish` do the model's work and the service runs
     them one at a time on one thread. Nothing is called after `finish`."""
 
-    def feed(self, audio: np.ndarray) -> None: ...
+    def feed(self, pcm: bytes) -> None:
+        """The frame as it arrived on the wire. Sessions that decode locally convert it;
+        one that forwards it to a server sends these bytes on, so a frame is not turned
+        into floats and back on the event loop for every call."""
+        ...
 
     def advance(self) -> str:
         """Everything decoded from the audio fed so far."""
@@ -227,8 +231,8 @@ class VoxtralSession:
         self._session = session
         self._text = ""
 
-    def feed(self, audio: np.ndarray) -> None:
-        self._session.feed(audio)
+    def feed(self, pcm: bytes) -> None:
+        self._session.feed(to_samples(pcm))
 
     def advance(self) -> str:
         while not self._session.done:
@@ -312,8 +316,8 @@ class VllmRealtimeSession:
         self._open = contextlib.ExitStack()
         self._failure: Exception | None = None
 
-    def feed(self, audio: np.ndarray) -> None:
-        self._pending.append(to_pcm16(audio))
+    def feed(self, pcm: bytes) -> None:
+        self._pending.append(pcm)
 
     def advance(self) -> str:
         self._run(lambda: self._drain_until(time.monotonic()))
@@ -506,13 +510,12 @@ class StreamingTurn:
         self._samples = 0
 
     def add(self, pcm: bytes) -> None:
-        samples = to_samples(pcm)
         if self._session is None:
-            if not carries_speech(samples, self._transcriber.speech_floor_dbfs):
+            if not carries_speech(to_samples(pcm), self._transcriber.speech_floor_dbfs):
                 return
             self._session = self._transcriber.session()
-        self._session.feed(samples)
-        self._samples += samples.size
+        self._session.feed(pcm)
+        self._samples += len(pcm) // 2
 
     @property
     def ready(self) -> bool:

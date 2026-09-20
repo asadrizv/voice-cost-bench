@@ -60,8 +60,8 @@ class StubSession:
         self.fed_seconds = 0.0
         self._words = 0
 
-    def feed(self, audio: np.ndarray) -> None:
-        self.fed_seconds += audio.size / 16000
+    def feed(self, pcm: bytes) -> None:
+        self.fed_seconds += len(pcm) / 2 / 16000
 
     def advance(self) -> str:
         self._words += 1
