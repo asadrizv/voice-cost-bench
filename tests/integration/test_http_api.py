@@ -280,7 +280,8 @@ async def test_transparency_follows_the_catalogue_and_the_running_configuration(
     catalogue = config / "components.yaml"
     catalogue.write_text(
         catalogue.read_text().replace(
-            "licence: Apache-2.0\n  qwen3-tts:", "licence: X\n  qwen3-tts:"
+            "kokoro>=0.9.4\n    host: gpu_host\n    licence: Apache-2.0",
+            "kokoro>=0.9.4\n    host: gpu_host\n    licence: X",
         )
     )
     settings = SETTINGS.model_copy(
@@ -503,7 +504,10 @@ async def test_an_unreachable_service_leaves_its_default_listed_but_unconfirmed(
         ),
         (
             {},
-            ("    licence: Apache-2.0\n  qwen3-tts:", "  qwen3-tts:"),
+            (
+                "kokoro>=0.9.4\n    host: gpu_host\n    licence: Apache-2.0",
+                "kokoro>=0.9.4\n    host: gpu_host",
+            ),
             "'kokoro': needs licence",
         ),
         ({}, ("  qwen3-tts:\n    kind: tts", "  qwen3-tts-old:\n    kind: tts"), "'qwen3-tts'"),

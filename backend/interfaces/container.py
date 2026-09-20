@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import logging
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from backend.application.dto.call_context import CallContext
 from backend.application.ports.audio_output import AudioOutput
 from backend.application.ports.call_repository import CallRepository
-from backend.application.ports.component_catalogue import EngineCatalogue
+from backend.application.ports.component_catalogue import Component, EngineCatalogue
 from backend.application.ports.endpoint_detector import EndpointDetector
 from backend.application.ports.metrics_sink import MetricsSink
 from backend.application.ports.pipeline_provider import PipelineProvider
@@ -20,6 +21,7 @@ from backend.application.services.endpointing import (
     SmartTurnEndpointDetector,
 )
 from backend.application.use_cases.call_session import CallSession, SessionConfig
+from backend.application.use_cases.check_gpu_budget import CheckGpuBudget
 from backend.application.use_cases.compare_pipelines import ComparePipelines
 from backend.application.use_cases.compute_call_cost import ComputeCallCost
 from backend.application.use_cases.describe_components import DescribeComponents
@@ -27,6 +29,7 @@ from backend.application.use_cases.end_call import EndCall
 from backend.application.use_cases.handle_call_turn import HandleCallTurn
 from backend.application.use_cases.start_call import StartCall
 from backend.domain.services.cost_calculator import CostCalculator
+from backend.domain.services.gpu_memory_budget import BudgetVerdict
 from backend.domain.value_objects.pipeline_kind import PipelineKind
 from backend.infrastructure.config.component_catalogue import YamlComponentCatalogue
 from backend.infrastructure.config.personas import YamlPersonaProvider
@@ -37,12 +40,15 @@ from backend.infrastructure.pipeline_factory import (
     SELFHOSTED_ENGINES,
     PipelineFactory,
     configured_components,
+    llm_memory_share,
     service_info_urls,
 )
 from backend.infrastructure.pricing.yaml_rate_card import YamlRateCardProvider
 from backend.infrastructure.running_engines import HttpRunningEngines
 from backend.infrastructure.system_clock import SystemClock
 from backend.infrastructure.vad.energy_vad import EnergyVad
+
+log = logging.getLogger(__name__)
 
 _supervisors: dict[int, dict[PipelineKind, ConcurrencySupervisor]] = {}
 
@@ -73,6 +79,7 @@ class Container:
     compute_cost: ComputeCallCost
     compare: ComparePipelines
     describe_components: DescribeComponents
+    gpu_budget: CheckGpuBudget
     turn_model: Callable[[bytes], float] | None = None
     """Smart Turn's model call; None loads the real one the first time it is selected."""
 
@@ -117,8 +124,24 @@ class Container:
 def validate_static_config(settings: Settings) -> None:
     """For processes that build containers lazily (the agent builds one per call): fail at
     startup on config that would otherwise fail every call. Raises the loaders' errors."""
-    build_catalogue(settings, YamlRateCardProvider(settings.rates_path))
+    catalogue = build_catalogue(settings, YamlRateCardProvider(settings.rates_path))
     YamlPersonaProvider(settings.personas_dir).validate_all()
+    warn_over_budget(
+        build_gpu_budget_check(settings, catalogue),
+        catalogue.components(PipelineKind.SELFHOSTED),
+    )
+
+
+def build_gpu_budget_check(settings: Settings, catalogue: EngineCatalogue) -> CheckGpuBudget:
+    return CheckGpuBudget(catalogue.gpu_memory(), llm_memory_share(settings))
+
+
+def warn_over_budget(check: CheckGpuBudget, components: Iterable[Component]) -> None:
+    """Warns rather than refuses: every figure behind the verdict is an estimate until #10
+    measures one on an L40S, and a wrong estimate must not stop a run."""
+    budget = check.execute(components)
+    if budget is not None and budget.verdict is not BudgetVerdict.FITS:
+        log.warning("GPU memory budget: %s", budget.summary())
 
 
 def build_catalogue(settings: Settings, rates: YamlRateCardProvider) -> YamlComponentCatalogue:
@@ -183,6 +206,7 @@ def build_container(
         compute_cost=ComputeCallCost(repository, calculator),
         compare=ComparePipelines(repository),
         turn_model=turn_model,
+        gpu_budget=build_gpu_budget_check(settings, catalogue),
         describe_components=DescribeComponents(
             catalogue,
             None

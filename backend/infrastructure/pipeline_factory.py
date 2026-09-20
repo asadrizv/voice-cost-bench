@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from decimal import Decimal
 
 import httpx
 import yaml
 
 from backend.application.ports.component_catalogue import ComponentKind
 from backend.application.ports.pipeline_provider import Pipeline
+from backend.application.use_cases.check_gpu_budget import LlmShare
 from backend.domain.value_objects.pipeline_kind import PipelineKind
 from backend.infrastructure.config.component_catalogue import ConfiguredComponent, Selection
 from backend.infrastructure.config.settings import Settings
@@ -143,6 +145,19 @@ def service_info_urls(s: Settings) -> dict[ComponentKind, str]:
         ),
         ComponentKind.TTS: f"{s.kokoro_url.rstrip('/')}/v1/info",
     }
+
+
+def llm_memory_share(s: Settings) -> LlmShare:
+    """What the LLM server takes off the card before anything else is placed on it."""
+    if s.llm_server == "ollama":
+        return LlmShare(None, "ollama reserves no fixed share of the card")
+    serving = yaml.safe_load(s.serving_config_path.read_text())
+    utilisation = serving.get("gpu-memory-utilization")
+    if utilisation is None:
+        return LlmShare(None, f"no gpu-memory-utilization in {s.serving_config}")
+    return LlmShare(
+        Decimal(str(utilisation)), f"gpu-memory-utilization: {utilisation} in {s.serving_config}"
+    )
 
 
 def _selfhosted_llm(s: Settings) -> ConfiguredComponent:

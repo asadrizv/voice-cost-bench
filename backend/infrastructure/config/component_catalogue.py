@@ -2,12 +2,18 @@ from __future__ import annotations
 
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from backend.application.ports.component_catalogue import Component, ComponentKind
+from backend.application.ports.component_catalogue import (
+    Component,
+    ComponentKind,
+    GpuMemoryProfile,
+)
+from backend.domain.services.gpu_memory_budget import BASES, GpuCapacity, MemoryClaim
 from backend.domain.value_objects.pipeline_kind import PipelineKind
 
 
@@ -54,9 +60,13 @@ class YamlComponentCatalogue:
             for kind, ids in engines.items()
             for engine_id in ids
         }
+        self._gpu_memory = _gpu_memory(hosts, entries)
 
     def version(self) -> int:
         return self._version
+
+    def gpu_memory(self) -> GpuMemoryProfile | None:
+        return self._gpu_memory
 
     def components(self, kind: PipelineKind) -> list[Component]:
         return list(self._components[kind])
@@ -110,3 +120,67 @@ def _resolve(
         leaves_eu=values["leaves_eu"],
         assumption=" ".join(a.strip() for a in assumptions if a.strip()),
     )
+
+
+def _gpu_memory(hosts: dict[str, Any], entries: dict[str, Any]) -> GpuMemoryProfile | None:
+    """The GPU a host declares, and what every component on that host is expected to hold
+    on it. None when no host has a GPU, so a deployment without one has no budget."""
+    with_gpu = {name: host["gpu"] for name, host in hosts.items() if host.get("gpu")}
+    if not with_gpu:
+        return None
+    if len(with_gpu) > 1:
+        raise ComponentCatalogueError(
+            f"the GPU memory budget assumes one GPU; {', '.join(sorted(with_gpu))} each name one"
+        )
+    host_name, gpu = next(iter(with_gpu.items()))
+    where = f"host {host_name!r} gpu"
+    capacity = GpuCapacity(
+        sku=_text(gpu, "sku", where),
+        total_gib=_gib(gpu, "total_gib", where),
+        basis=_basis(gpu, where),
+        source=_text(gpu, "source", where),
+    )
+    claims = {
+        component_id: _claim(component_id, entry)
+        for component_id, entry in entries.items()
+        if entry.get("host") == host_name
+    }
+    return GpuMemoryProfile(capacity, claims)
+
+
+def _claim(component_id: str, entry: dict[str, Any]) -> MemoryClaim:
+    """A component on the GPU with no gpu_memory block claims an unknown amount: reading
+    the gap as nothing would let an over-committed card look fine."""
+    figure = entry.get("gpu_memory")
+    if figure is None:
+        return MemoryClaim(component_id, None, "", "")
+    where = f"{component_id} gpu_memory"
+    return MemoryClaim(
+        component_id,
+        _gib(figure, "gib", where),
+        _basis(figure, where),
+        _text(figure, "source", where),
+    )
+
+
+def _basis(node: Any, where: str) -> str:
+    basis = _text(node, "basis", where)
+    if basis not in BASES:
+        raise ComponentCatalogueError(f"{where}: basis must be one of {', '.join(BASES)}")
+    return basis
+
+
+def _text(node: Any, field: str, where: str) -> str:
+    if not isinstance(node, dict) or not node.get(field):
+        raise ComponentCatalogueError(f"{where}: needs {field}")
+    return str(node[field])
+
+
+def _gib(node: dict[str, Any], field: str, where: str) -> Decimal:
+    try:
+        gib = Decimal(str(node[field]))
+    except (KeyError, InvalidOperation) as exc:
+        raise ComponentCatalogueError(f"{where}: needs {field} in GiB") from exc
+    if gib <= 0:
+        raise ComponentCatalogueError(f"{where}: {field} must be positive, not {gib}")
+    return gib

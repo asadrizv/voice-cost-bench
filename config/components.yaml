@@ -1,12 +1,23 @@
 # Every component that touches a call: served at GET /transparency, copied into provenance.
 # configured_components picks the entries, but self-hosted STT and TTS follow their services'
 # reports. Startup fails on a missing entry (SELFHOSTED_ENGINES too) or a repeated model.
+# gpu_memory feeds the memory budget check for components on a GPU host. The LLM's line comes
+# from gpu-memory-utilization in config/serving/ instead, and a component with no figure is
+# budgeted as unknown, never as nothing.
 version: 1
 
 hosts:
   gpu_host:
     region: "gpu-host (see deployment)"
     leaves_eu: false
+    gpu:
+      sku: L40S                 # the card rates.yaml prices; every gpu_memory below shares it
+      total_gib: 48.0
+      basis: vendor-stated
+      source: >-
+        NVIDIA's 48 GB for the L40S. The driver reports a little less once ECC is on, so
+        this budget is optimistic by a few GiB; #10 replaces it with what nvidia-smi reports
+        on the benchmark pod.
     assumption: >-
       Runs wherever the GPU runs. leaves_eu assumes an EU host, as the priced RunPod L40S
       (secure cloud, nl) is; on any other host this is false only if that host is in the EU.
@@ -67,6 +78,13 @@ components:
     version: faster-whisper>=1.1
     host: gpu_host
     licence: MIT
+    gpu_memory:
+      gib: 3.0
+      basis: estimated
+      source: >-
+        Recon's figure, and the one gpu-memory-utilization: 0.72 in config/serving/ was set
+        against. Weights are 1.50 GiB (large-v3-turbo, fp16, measured on disk); the rest is
+        runtime. Not measured on an L40S (#10).
     assumption: model is whisper_service's default; WHISPER_MODEL on the GPU host overrides it.
   mlx:
     kind: stt
@@ -75,6 +93,8 @@ components:
     version: mlx-whisper>=0.4
     host: gpu_host
     licence: MIT
+    # No gpu_memory: MLX is the Apple Silicon path and cannot run on the L40S, so any CUDA
+    # footprint for it would be invented. The budget reports it as unknown.
     assumption: model is whisper_service's default; WHISPER_MLX_REPO overrides it.
   voxtral:
     kind: stt
@@ -83,6 +103,14 @@ components:
     version: mlx-audio>=0.5.4
     host: gpu_host
     licence: Apache-2.0
+    gpu_memory:
+      gib: 9.98
+      basis: estimated
+      source: >-
+        bf16 weights are 8.48 GiB: 4.55B parameters, counted from the tensor shapes of the
+        4-bit MLX checkpoint this repo runs on Apple Silicon (2.92 GiB on disk). Plus 1.5 GiB
+        runtime, the gap between Whisper's measured weights and its figure above. An L40S
+        would serve bf16; there is no CUDA Voxtral engine here yet (#10).
     assumption: >-
       model and version are the Apple Silicon path; VOXTRAL_MLX_REPO names the quantisation
       actually loaded and the STT service reports it at /v1/info.
@@ -129,6 +157,12 @@ components:
     version: kokoro>=0.9.4
     host: gpu_host
     licence: Apache-2.0
+    gpu_memory:
+      gib: 1.0
+      basis: estimated
+      source: >-
+        Recon's figure, the other half of what gpu-memory-utilization: 0.72 was set against.
+        Weights are 0.31 GiB (measured on disk). Not measured on an L40S (#10).
   qwen3-tts:
     kind: tts
     vendor: Alibaba Cloud Qwen
@@ -136,6 +170,13 @@ components:
     version: mlx-audio>=0.5.4
     host: gpu_host
     licence: Apache-2.0
+    gpu_memory:
+      gib: 5.48
+      basis: estimated
+      source: >-
+        bf16 weights are 3.98 GiB: 2.13B parameters (talker plus codec decoder), counted from
+        the tensor shapes of the 8-bit MLX checkpoint this repo runs (2.86 GiB on disk). Plus
+        the same 1.5 GiB runtime allowance as Voxtral. An L40S would serve bf16 (#10).
     assumption: >-
       The German voice is a written description, not a cloned recording. model and version
       are the Apple Silicon path; QWEN3_TTS_MODEL names the quantisation actually loaded
