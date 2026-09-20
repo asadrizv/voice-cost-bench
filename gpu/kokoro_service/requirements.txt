@@ -1,7 +1,6 @@
-# The Qwen3-TTS engine's Apple Silicon runtime is deliberately absent: mlx-audio comes from
-# the project's `local` extra. Its CUDA backend needs no runtime here either -- it reaches a
-# vLLM-Omni server over HTTP -- so this image runs Kokoro, which is what TTS_ENGINES
-# defaults to, and qwen3-tts-vllm.
+# Qwen3-TTS's Apple Silicon runtime is deliberately absent (mlx-audio comes from the
+# project's `local` extra), and qwen3-tts-vllm needs none: it reaches a vLLM-Omni server
+# over HTTP. This image runs Kokoro and qwen3-tts-vllm.
 fastapi>=0.115
 uvicorn[standard]>=0.32
 kokoro>=0.9.4

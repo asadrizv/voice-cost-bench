@@ -2,9 +2,8 @@
 # NVIDIA container toolkit). On a RunPod *pod* there is no Docker daemon: use
 # gpu/runpod/ instead, which runs the same three services in one container.
 #
-# The two speech servers are behind compose profiles, and one card cannot hold them beside
-# the LLM at its shipped share: see "GPU memory on one card" in gpu/README.md before
-# enabling either.
+# The two speech servers sit behind compose profiles: read "GPU memory on one card" in
+# gpu/README.md before enabling either, because one card cannot hold both beside the LLM.
 x-gpu: &gpu
   deploy:
     resources:

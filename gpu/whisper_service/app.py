@@ -560,10 +560,9 @@ def create_app(
         state["transcriber"] = transcriber
         new_turn = turns(transcriber)
         state["new_turn"] = new_turn
-        # An engine holding its model here keeps decoder state between steps, so every
-        # session steps on the one thread the model was built on. That also keeps a
-        # cancelled interim ordered ahead of the flush behind it: cancelling releases the
-        # slot but not the thread.
+        # An engine holding its model here steps every session on the one thread the model
+        # was built on, which also keeps a cancelled interim ordered ahead of the flush
+        # behind it: cancelling releases the slot but not the thread.
         alone = (
             isinstance(transcriber, StreamingTranscriber) and transcriber.sessions_share_one_thread
         )
