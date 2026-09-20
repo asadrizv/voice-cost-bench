@@ -319,6 +319,19 @@ async def test_a_vllm_omni_failure_before_any_audio_is_refused_with_a_status() -
     assert "engine failed to start generation" in response.json()["error"]
 
 
+async def test_a_request_vllm_omni_refuses_is_not_played_to_the_caller_as_audio() -> None:
+    """A refusal comes back as JSON under a 4xx -- a checkpoint that cannot do VoiceDesign
+    is the documented case -- and a client reading it as PCM would play it as noise."""
+    async with (
+        omni_service(omni_server(refusal_status=400)) as host,
+        httpx.AsyncClient(base_url=f"http://{host}") as client,
+    ):
+        response = await client.post("/v1/synthesize", json={"text": "FAIL", "voice": GERMAN_VOICE})
+
+    assert response.status_code == 500
+    assert "does not support task_type" in response.json()["error"]
+
+
 async def test_a_vllm_omni_stream_that_dies_mid_body_reaches_the_caller_as_a_failure() -> None:
     """Raw PCM carries no error frame, so a dying engine can only cut the body. The caller
     has to see a broken stream rather than a short, clean one it would play as the whole

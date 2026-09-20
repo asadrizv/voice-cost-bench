@@ -108,6 +108,10 @@ class FakeVllmRealtime:
     models: list[str] = field(default_factory=list)
     audio: bytearray = field(default_factory=bytearray)
     generations: int = 0
+    open_finals: int = 0
+    concurrent_finals: int = 0
+    """The most final commits this server was answering at once, which is how many callers
+    it was finishing an utterance for at once."""
 
     def app(self) -> FastAPI:
         app = FastAPI()
@@ -142,6 +146,8 @@ class FakeVllmRealtime:
                         generating, said = True, 0
                         self.generations += 1
                     elif not self.silent:
+                        self.open_finals += 1
+                        self.concurrent_finals = max(self.concurrent_finals, self.open_finals)
                         for index in range(said, len(words)):
                             await ws.send_json(
                                 {"type": "transcription.delta", "delta": _spoken(words, index)}
@@ -151,6 +157,7 @@ class FakeVllmRealtime:
                             {"type": "transcription.done", "text": self.corrected or self.text}
                         )
                         generating = False
+                        self.open_finals -= 1
 
         return app
 
@@ -175,6 +182,9 @@ class FakeVllmOmniSpeech:
     chunk_bytes: int = 777
     refuses: str = "FAIL"
     """Input text the engine refuses, as a model that cannot serve the request does."""
+    refusal_status: int = 500
+    """The status it refuses with: 500 for an engine that failed, 400 for a request its
+    checkpoint cannot serve."""
     truncates: str = ""
     """Input text whose body stops after one chunk, as an engine that dies mid-stream
     leaves it: the raw form has no error frame to send instead."""
@@ -202,7 +212,12 @@ class FakeVllmOmniSpeech:
             if payload.get("speed", 1.0) != 1.0:
                 return _omni_error("Streaming requires speed 1.0", 400)
         if payload["input"] == self.refuses:
-            return _omni_error("engine failed to start generation", 500)
+            return _omni_error(
+                "Qwen3-TTS CustomVoice checkpoint does not support task_type='VoiceDesign'"
+                if self.refusal_status == 400
+                else "engine failed to start generation",
+                self.refusal_status,
+            )
         return None
 
     async def _body(self, text: str) -> AsyncIterator[bytes]:

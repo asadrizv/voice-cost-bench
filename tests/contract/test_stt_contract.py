@@ -75,6 +75,7 @@ class StubStreamingTranscriber:
     engine, backend = VoxtralTranscriber.engine, VoxtralTranscriber.backend
     model = VoxtralTranscriber.model
     speech_floor_dbfs = VoxtralTranscriber.speech_floor_dbfs
+    sessions_share_one_thread = VoxtralTranscriber.sessions_share_one_thread
 
     def __init__(self) -> None:
         self.sessions: list[StubSession] = []
@@ -457,6 +458,19 @@ async def test_a_flush_waits_for_the_answer_the_realtime_server_is_still_generat
         events = await asyncio.wait_for(collect(stt.stream(speech_then(FlushSignal()), "en")), 10)
 
     assert [e.text for e in events if e.flushed] == [corrected]
+
+
+async def test_two_calls_on_the_cuda_engine_are_served_at_the_same_time() -> None:
+    """A session here holds a socket, not a decoder, so one call waiting on the server must
+    not stop the next: serialising them would make this service, not the GPU, the ceiling."""
+    server = FakeVllmRealtime(text=UTTERANCE, answer_delay_s=0.3)
+
+    async with realtime_service(server) as stt:
+        calls = [collect(stt.stream(speech_then(FlushSignal()), "en")) for _ in range(2)]
+        answered = await asyncio.wait_for(asyncio.gather(*calls), 15)
+
+    assert [[e.text for e in events if e.flushed] for events in answered] == [[UTTERANCE]] * 2
+    assert server.concurrent_finals == 2
 
 
 async def test_a_realtime_server_that_answers_nothing_still_answers_the_flush_once() -> None:

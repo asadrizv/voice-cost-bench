@@ -162,6 +162,9 @@ class StreamingTranscriber(Protocol):
     model: str
     speech_floor_dbfs: float
     """Below this the service keeps audio off the model; see VoxtralTranscriber."""
+    sessions_share_one_thread: bool
+    """Whether every session has to step on the same thread, which is true of a model this
+    process holds and false of one each session reaches over a socket."""
 
     def session(self) -> TranscriptionSession: ...
 
@@ -184,6 +187,7 @@ class VoxtralTranscriber:
 
     engine = backend = "voxtral"
     model = os.environ.get("VOXTRAL_MLX_REPO", "mlx-community/Voxtral-Mini-4B-Realtime-2602-4bit")
+    sessions_share_one_thread = True
 
     speech_floor_dbfs = -60.0
     """Voxtral needs no confidence filter but it does need keeping off silence, and the
@@ -259,6 +263,9 @@ class VllmVoxtralTranscriber:
 
     engine = "voxtral"
     backend = "voxtral-vllm"
+    sessions_share_one_thread = False
+    """The model is in another process, so a session holds a socket rather than a decoder:
+    a call waiting on the server must not stop the other calls being served."""
     speech_floor_dbfs = VoxtralTranscriber.speech_floor_dbfs
     """The gate measured on the 4-bit MLX quantisation, reused unmeasured for bf16 on CUDA.
     It sits under the quietest speech that quantisation was measured to read, so it errs
@@ -553,10 +560,14 @@ def create_app(
         state["transcriber"] = transcriber
         new_turn = turns(transcriber)
         state["new_turn"] = new_turn
-        # A streaming engine keeps decoder state between steps, so every session steps on
-        # the one thread its model was built on. It also keeps a cancelled interim ordered
-        # ahead of the flush behind it: cancelling releases the slot but not the thread.
-        threads = 1 if isinstance(transcriber, StreamingTranscriber) else workers
+        # An engine holding its model here keeps decoder state between steps, so every
+        # session steps on the one thread the model was built on. That also keeps a
+        # cancelled interim ordered ahead of the flush behind it: cancelling releases the
+        # slot but not the thread.
+        alone = (
+            isinstance(transcriber, StreamingTranscriber) and transcriber.sessions_share_one_thread
+        )
+        threads = 1 if alone else workers
         state["pool"] = ThreadPoolExecutor(max_workers=threads)
         state["slots"] = asyncio.Semaphore(threads)
         # Warm load: the first real call must not pay for kernel compilation. It runs on
