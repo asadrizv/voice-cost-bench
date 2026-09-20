@@ -1,6 +1,10 @@
 # Self-hosted stack on one GPU node (Scaleway, OVH, Nebius, or any VM with Docker and the
 # NVIDIA container toolkit). On a RunPod *pod* there is no Docker daemon: use
 # gpu/runpod/ instead, which runs the same three services in one container.
+#
+# The two speech servers are behind compose profiles, and one card cannot hold them beside
+# the LLM at its shipped share: see "GPU memory on one card" in gpu/README.md before
+# enabling either.
 x-gpu: &gpu
   deploy:
     resources:
@@ -23,14 +27,59 @@ services:
   whisper:
     <<: *gpu
     build: { context: ., dockerfile: whisper_service/Dockerfile }
-    environment: { WHISPER_MODEL: large-v3-turbo, WHISPER_WORKERS: "3" }
+    environment:
+      WHISPER_BACKEND: "${WHISPER_BACKEND:-faster-whisper}"
+      WHISPER_MODEL: large-v3-turbo
+      WHISPER_WORKERS: "3"
+      VOXTRAL_VLLM_URL: "${VOXTRAL_VLLM_URL:-ws://voxtral-vllm:8003/v1/realtime}"
     ports: ["8001:8001"]
 
   kokoro:
     <<: *gpu
     build: { context: ., dockerfile: kokoro_service/Dockerfile }
-    environment: { KOKORO_WORKERS: "3" }
+    environment:
+      TTS_ENGINES: "${TTS_ENGINES:-kokoro}"
+      KOKORO_WORKERS: "3"
+      QWEN3_TTS_VLLM_URL: "${QWEN3_TTS_VLLM_URL:-http://qwen3-tts-vllm:8004}"
     ports: ["8002:8002"]
+
+  # `--profile voxtral`, with WHISPER_BACKEND=voxtral-vllm. The whisper service restarts
+  # until this one answers rather than declaring a dependency, so that leaving the profile
+  # off does not drag the server in.
+  voxtral-vllm:
+    <<: *gpu
+    profiles: [voxtral]
+    image: vllm/vllm-openai:v0.29.0
+    # The realtime endpoint reads Voxtral through mistral_common's audio extra, which the
+    # base image does not carry; installing it at start keeps the image pinned.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        pip install -q 'mistral-common[audio]>=1.9.0' &&
+        exec vllm serve ${VOXTRAL_VLLM_MODEL:-mistralai/Voxtral-Mini-4B-Realtime-2602}
+        --tokenizer-mode mistral --enforce-eager --port 8003
+        --gpu-memory-utilization ${VOXTRAL_GPU_FRACTION:-0.34}
+    environment: { HF_TOKEN: "${HF_TOKEN:-}" }
+    volumes: [hf-cache:/root/.cache/huggingface]
+    ports: ["8003:8003"]
+    ipc: host
+
+  # `--profile qwen3-tts`, with TTS_ENGINES=kokoro,qwen3-tts-vllm. The image has no default
+  # entrypoint, so the serve command follows it, and --omni selects the omni engine.
+  qwen3-tts-vllm:
+    <<: *gpu
+    profiles: [qwen3-tts]
+    image: vllm/vllm-omni:v0.28.0
+    command:
+      - >-
+        vllm serve ${QWEN3_TTS_VLLM_MODEL:-Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign}
+        --omni --trust-remote-code --enforce-eager --port 8004
+        --deploy-config vllm_omni/deploy/qwen3_tts.yaml
+        --gpu-memory-utilization ${QWEN3_TTS_GPU_FRACTION:-0.30}
+    environment: { HF_TOKEN: "${HF_TOKEN:-}" }
+    volumes: [hf-cache:/root/.cache/huggingface]
+    ports: ["8004:8004"]
+    ipc: host
 
   dcgm-exporter:
     <<: *gpu

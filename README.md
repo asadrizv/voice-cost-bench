@@ -160,9 +160,11 @@ With the shipped catalogue an EU-only deployment is `PIPELINE=selfhosted` plus:
 The profile cannot yet speak German on one L40S. Kokoro has no German voice, so German
 needs Qwen3-TTS, and ElevenLabs is not available under the profile: Qwen3-TTS (5.48 GiB)
 beside Voxtral (9.98 GiB) and the LLM's configured 0.72 share of the card (34.56 GiB)
-comes to 50.02 GiB, 2.02 GiB more than an L40S holds. Today that stack runs on Apple
-Silicon (a CUDA backend is #32); on one L40S it needs a smaller LLM share, which is a
-change to make against #10's measurements rather than to assume. Startup reports an
+comes to 50.02 GiB, 2.02 GiB more than an L40S holds. That stack runs on Apple Silicon
+today; both engines now have CUDA backends, but each is served by a vLLM process that
+reserves a share of the card rather than its weights, so on one L40S they need a much
+smaller LLM share still (`gpu/README.md`, "GPU memory on one card") -- a change to make
+against #10's measurements rather than to assume. Startup reports an
 over-committed card as an error under the profile, and only a warning without it, because
 the profile has no API pipeline to fall back on — it still starts, since every memory
 figure is an estimate until #10 measures one.
@@ -190,9 +192,10 @@ cached, so a clean checkout downloads nothing.
   shared. It's identical on both sides, so it narrows the percentage saving. The selected
   carrier in `config/rates.yaml` (Twilio, $0.014/min) prices it; the benchmark also shows
   cost per minute under each other listed carrier. Telnyx and sipgate are unverified.
-- **German self-hosted TTS runs on Apple Silicon only.** Kokoro has no German voice, so
-  the German persona uses Qwen3-TTS, which streams through mlx-audio. A CUDA backend is
-  still to come (#32), so a German comparison on the L40S is not yet fair.
+- **German self-hosted TTS has only been run on Apple Silicon.** Kokoro has no German
+  voice, so the German persona uses Qwen3-TTS, which streams through mlx-audio. Its CUDA
+  backend (vLLM-Omni) is contract-tested but has never been run on a GPU, so a German
+  comparison on the L40S is not yet fair.
 - **The WER corpus is synthetic speech** (`fixtures/wer/README.md`). It's fine for
   regression and head-to-head comparison, not for a published German WER.
 - **Quote loaded cost at a stated utilisation and concurrency**, never a bare per-minute

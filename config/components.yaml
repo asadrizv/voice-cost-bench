@@ -109,10 +109,13 @@ components:
         bf16 weights are 8.48 GiB: 4.55B parameters, counted from the tensor shapes of the
         4-bit MLX checkpoint this repo runs on Apple Silicon (2.92 GiB on disk). Plus 1.5 GiB
         runtime, the gap between Whisper's measured weights and its figure above. An L40S
-        would serve bf16; there is no CUDA Voxtral engine here yet (#10).
+        would serve bf16, through a vLLM process that reserves a share of the card rather
+        than this footprint -- vLLM's recipe asks for >= 16 GiB (gpu/README.md). Neither
+        figure is measured (#10).
     assumption: >-
-      model and version are the Apple Silicon path; VOXTRAL_MLX_REPO names the quantisation
-      actually loaded and the STT service reports it at /v1/info.
+      model and version are the Apple Silicon path; the CUDA runtime is vLLM's realtime API.
+      Either way the STT service reports the weights and the runtime that served the call at
+      /v1/info, which is what /transparency lists.
 
   openai:
     kind: llm
@@ -175,11 +178,14 @@ components:
       source: >-
         bf16 weights are 3.98 GiB: 2.13B parameters (talker plus codec decoder), counted from
         the tensor shapes of the 8-bit MLX checkpoint this repo runs (2.86 GiB on disk). Plus
-        the same 1.5 GiB runtime allowance as Voxtral. An L40S would serve bf16 (#10).
+        the same 1.5 GiB runtime allowance as Voxtral. An L40S would serve bf16, through a
+        vLLM-Omni process that reserves a share of the card rather than this footprint
+        (gpu/README.md). Neither figure is measured (#10).
     assumption: >-
       The German voice is a written description, not a cloned recording. model and version
-      are the Apple Silicon path; QWEN3_TTS_MODEL names the quantisation actually loaded
-      and the TTS service reports it at /v1/info.
+      are the Apple Silicon path; the CUDA runtime is vLLM-Omni's speech API. Either way the
+      TTS service reports the weights and the runtime that served the call at /v1/info,
+      which is what /transparency lists.
 
   livekit-server:
     kind: orchestration

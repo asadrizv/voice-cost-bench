@@ -1,8 +1,10 @@
 # The Apple Silicon engines' runtimes are deliberately absent: mlx-whisper and mlx-audio
-# come from the project's `local` extra, and Voxtral's CUDA backend (vLLM realtime) is #32.
-# This image therefore runs faster-whisper only, which is what WHISPER_BACKEND defaults to.
+# come from the project's `local` extra. Voxtral's CUDA backend needs no runtime here
+# either -- it reaches a vLLM realtime server over a WebSocket -- so this image runs
+# faster-whisper, which is what WHISPER_BACKEND defaults to, and voxtral-vllm.
 fastapi>=0.115
 uvicorn[standard]>=0.32
 faster-whisper>=1.1
 numpy>=2.0
 prometheus-client>=0.21
+websockets>=14

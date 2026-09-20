@@ -178,8 +178,9 @@ interim waits for one step rather than a whole utterance."""
 
 class VoxtralTranscriber:
     """Apple Silicon: Voxtral Mini 4B Realtime through mlx-audio, the only runtime that
-    streams it without CUDA (the vLLM realtime backend is #32). It identifies the spoken
-    language itself, so the socket's `language` is not passed on."""
+    streams it without CUDA (VllmVoxtralTranscriber serves the same weights where there is
+    a card). It identifies the spoken language itself, so the socket's `language` is not
+    passed on."""
 
     engine = backend = "voxtral"
     model = os.environ.get("VOXTRAL_MLX_REPO", "mlx-community/Voxtral-Mini-4B-Realtime-2602-4bit")
@@ -273,11 +274,11 @@ class VllmVoxtralTranscriber:
             "VOXTRAL_VLLM_MODEL", "mistralai/Voxtral-Mini-4B-Realtime-2602"
         )
         self.model = f"{self.served_model} (vLLM realtime)"
-        self._url = url or os.environ.get("VOXTRAL_VLLM_URL", "ws://127.0.0.1:8003/v1/realtime")
+        self.url = url or os.environ.get("VOXTRAL_VLLM_URL", "ws://127.0.0.1:8003/v1/realtime")
         self._flush_timeout_s = flush_timeout_s
 
     def session(self) -> TranscriptionSession:
-        return VllmRealtimeSession(self._url, self.served_model, self._flush_timeout_s)
+        return VllmRealtimeSession(self.url, self.served_model, self._flush_timeout_s)
 
 
 class VllmRealtimeSession:
@@ -285,7 +286,8 @@ class VllmRealtimeSession:
     session.created on connect, session.update names the model, a commit starts a
     generation, input_audio_buffer.append carries base64 PCM16 at 16 kHz, transcription
     .delta streams the text, and a commit with final=true ends the generation with
-    transcription.done.
+    transcription.done. Every part of that is upstream's, from its docs and the endpoint's
+    own source, but none of it has been exchanged with a running server, for want of a card.
     https://github.com/vllm-project/vllm/blob/main/docs/serving/online_serving/speech_to_text.md
 
     `feed` runs on the event loop, so it only buffers; the socket is opened, written and
@@ -349,6 +351,8 @@ class VllmRealtimeSession:
         self._connection().send(json.dumps(event))
 
     def _send_audio(self) -> None:
+        # Swapped rather than drained: `feed` may append from the event loop while this
+        # runs, and an append lands in whichever list it finds, never between the two.
         pending, self._pending = self._pending, []
         for pcm in pending:
             self._send(

@@ -112,7 +112,7 @@ class Qwen3TtsSynthesizer:
     """Apple Silicon: Qwen3-TTS VoiceDesign through mlx-audio, which is the only Qwen3-TTS
     runtime that streams (the official qwen-tts package does not, and pins transformers
     4.57). Voices are written descriptions in voices.yaml, so no recording is cloned. The
-    CUDA backend is a separate engine; see gpu/README.md."""
+    CUDA runtime for this engine is VllmOmniQwen3TtsSynthesizer; see gpu/README.md."""
 
     engine = backend = "qwen3-tts"
     model = os.environ.get("QWEN3_TTS_MODEL", "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit")
@@ -154,7 +154,15 @@ class VllmOmniQwen3TtsSynthesizer:
 
     The reported model names the runtime as well as the weights: which runtime served a
     benchmark run is not otherwise recoverable from provenance, since the catalogue's
-    version is fixed configuration and the two runtimes share an engine id."""
+    version is fixed configuration and the two runtimes share an engine id.
+
+    The request is the documented one -- raw PCM from stream_format="audio", the VoiceDesign
+    voice in `instructions`, a capitalised `language` --
+    https://github.com/vllm-project/vllm-omni/blob/main/docs/serving/speech_api.md
+    but it has never been sent to a server, for want of a CUDA card. One part is confirmed
+    by nothing: no source states the byte order of that PCM, and it is read here as
+    little-endian, which is what the RAW/PCM_16 encoder upstream writes it with and what
+    vLLM-Omni's own client reads it as."""
 
     engine = "qwen3-tts"
     backend = "qwen3-tts-vllm"
@@ -171,9 +179,9 @@ class VllmOmniQwen3TtsSynthesizer:
         self.model = f"{self.served_model} (vLLM-Omni)"
         self._voices = load_voices(VOICES_PATH)
         self.warmup_voice = next(iter(self._voices))
+        self.base_url = base_url or os.environ.get("QWEN3_TTS_VLLM_URL", "http://127.0.0.1:8004")
         self._client = client or httpx.Client(
-            base_url=base_url or os.environ.get("QWEN3_TTS_VLLM_URL", "http://127.0.0.1:8004"),
-            timeout=httpx.Timeout(30.0, connect=5.0),
+            base_url=self.base_url, timeout=httpx.Timeout(30.0, connect=5.0)
         )
 
     def speaks(self, voice: str) -> bool:
