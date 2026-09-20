@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -81,7 +81,7 @@ class YamlComponentCatalogue:
 
 
 def require_eu_residency(
-    catalogue: EngineCatalogue, pipelines: Iterable[PipelineKind], engines: Engines
+    catalogue: EngineCatalogue, pipelines: Collection[PipelineKind], engines: Engines
 ) -> None:
     """The EU-only profile's gate: raises NotEuResident naming every component a call on
     those pipelines could touch that is not EU-resident. A self-hosted service picks its
@@ -93,13 +93,13 @@ def require_eu_residency(
                 offenders[component.id] = _named(
                     f"{pipeline.value} {component.kind.value}", component
                 )
-        if pipeline is not PipelineKind.SELFHOSTED:
-            continue
+    selfhosted = PipelineKind.SELFHOSTED
+    if selfhosted in pipelines:
         for kind, ids in engines.items():
             for engine_id in ids:
                 entry = catalogue.engine(kind, engine_id)
                 if entry is not None and entry.leaves_eu and entry.id not in offenders:
-                    offenders[entry.id] = _named(f"{pipeline.value} {kind.value} engine", entry)
+                    offenders[entry.id] = _named(f"{selfhosted.value} {kind.value} engine", entry)
     if offenders:
         raise NotEuResident(
             f"EU_ONLY is set, but these components leave the EU: {', '.join(offenders.values())}. "

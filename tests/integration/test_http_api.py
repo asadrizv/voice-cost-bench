@@ -815,3 +815,19 @@ def test_a_deployment_without_the_profile_only_warns_about_the_same_card(
     [record] = [r for r in caplog.records if r.levelno >= logging.WARNING]
     assert record.levelno == logging.WARNING
     assert record.getMessage().startswith("GPU memory budget: L40S 48.00 GiB:")
+
+
+def test_the_eu_only_error_names_every_offender_in_one_sentence(tmp_path: Path) -> None:
+    """A data-protection officer has to act on this line: every subprocessor that would
+    see the call, with the vendor and region that disqualify it (§43e BRAO)."""
+    settings = eu_settings(eu_config(tmp_path, "twilio"), pipeline=PipelineKind.API)
+
+    with pytest.raises(NotEuResident) as raised:
+        validate_static_config(settings)
+
+    assert str(raised.value) == (
+        "EU_ONLY is set, but these components leave the EU: "
+        "api telephony 'twilio' (Twilio, us), api stt 'deepgram' (Deepgram, us), "
+        "api llm 'openai' (OpenAI, us), api tts 'elevenlabs' (ElevenLabs, us). "
+        "Select EU-resident components or unset EU_ONLY."
+    )

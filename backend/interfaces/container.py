@@ -140,9 +140,7 @@ def build_gpu_budget_check(settings: Settings, catalogue: EngineCatalogue) -> Ch
     return CheckGpuBudget(catalogue.gpu_memory(), llm_memory_share(settings))
 
 
-def warn_over_budget(
-    check: CheckGpuBudget, components: Iterable[Component], eu_only: bool = False
-) -> None:
+def warn_over_budget(check: CheckGpuBudget, components: Iterable[Component], eu_only: bool) -> None:
     """Warns rather than refuses: every figure behind the verdict is an estimate until #10
     measures one on an L40S, and a wrong estimate must not stop a run. Under the EU-only
     profile the same estimate is an error: no other pipeline may take the calls, so a card
