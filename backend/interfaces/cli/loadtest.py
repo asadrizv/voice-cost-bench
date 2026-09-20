@@ -80,7 +80,7 @@ async def _sweep(args: argparse.Namespace) -> dict[str, Any]:
     # Asked before the first level, not after the last: the point of the budget is to be
     # read while the pod is still cheap to stop.
     components = await describer.execute(kind)
-    warn_over_budget(container.gpu_budget, [d.component for d in components])
+    warn_over_budget(container.gpu_budget, [d.component for d in components], settings.eu_only)
 
     carriers = container.rates.telephony_quotes()
     results: list[dict[str, Any]] = []

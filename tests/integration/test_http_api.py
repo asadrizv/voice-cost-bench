@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import shutil
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
@@ -776,3 +777,41 @@ async def test_a_caller_cannot_ask_for_a_pipeline_the_eu_only_profile_refused(
     )
     assert allowed.json()["pipeline"] == "selfhosted"
     assert default.json()["pipeline"] == "selfhosted"
+
+
+def over_committed(config: Path) -> Path:
+    """The LLM's share raised until the engines beside it no longer fit the card."""
+    serving = config / "serving" / "qwen-9b-l40s.yaml"
+    serving.write_text(
+        serving.read_text().replace("gpu-memory-utilization: 0.72", "gpu-memory-utilization: 0.95")
+    )
+    return config
+
+
+def test_the_eu_only_profile_has_no_pipeline_to_fall_back_on_when_the_card_overruns(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Without the profile an overrun degrades to the API pipeline; under it there is
+    nothing else to take the call, so the same estimate is worth more than a warning."""
+    settings = eu_settings(over_committed(eu_config(tmp_path)))
+
+    with caplog.at_level(logging.WARNING):
+        validate_static_config(settings)
+
+    [record] = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert record.levelno == logging.ERROR
+    assert record.getMessage().startswith("EU_ONLY has no pipeline to fall back on.")
+    assert record.getMessage().endswith("1.60 GiB short (does not fit)")
+
+
+def test_a_deployment_without_the_profile_only_warns_about_the_same_card(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    settings = SETTINGS.model_copy(update={"config_dir": over_committed(eu_config(tmp_path))})
+
+    with caplog.at_level(logging.WARNING):
+        validate_static_config(settings)
+
+    [record] = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert record.levelno == logging.WARNING
+    assert record.getMessage().startswith("GPU memory budget: L40S 48.00 GiB:")

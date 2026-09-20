@@ -132,6 +132,7 @@ def validate_static_config(settings: Settings) -> None:
     warn_over_budget(
         build_gpu_budget_check(settings, catalogue),
         catalogue.components(PipelineKind.SELFHOSTED),
+        settings.eu_only,
     )
 
 
@@ -139,11 +140,19 @@ def build_gpu_budget_check(settings: Settings, catalogue: EngineCatalogue) -> Ch
     return CheckGpuBudget(catalogue.gpu_memory(), llm_memory_share(settings))
 
 
-def warn_over_budget(check: CheckGpuBudget, components: Iterable[Component]) -> None:
+def warn_over_budget(
+    check: CheckGpuBudget, components: Iterable[Component], eu_only: bool = False
+) -> None:
     """Warns rather than refuses: every figure behind the verdict is an estimate until #10
-    measures one on an L40S, and a wrong estimate must not stop a run."""
+    measures one on an L40S, and a wrong estimate must not stop a run. Under the EU-only
+    profile the same estimate is an error: no other pipeline may take the calls, so a card
+    that cannot hold the stack leaves nothing to answer them with."""
     budget = check.execute(components)
-    if budget is not None and budget.verdict is not BudgetVerdict.FITS:
+    if budget is None or budget.verdict is BudgetVerdict.FITS:
+        return
+    if eu_only:
+        log.error("EU_ONLY has no pipeline to fall back on. %s", budget.summary())
+    else:
         log.warning("GPU memory budget: %s", budget.summary())
 
 
