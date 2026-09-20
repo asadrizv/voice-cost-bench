@@ -92,9 +92,16 @@ class KokoroSynthesizer:
 
 
 VOICES_PATH = Path(os.environ.get("QWEN3_TTS_VOICES") or Path(__file__).with_name("voices.yaml"))
-STREAMING_INTERVAL_S = 0.5
-"""Seconds of audio per streamed chunk. Below this mlx-audio's per-chunk vocoder overhead
-starts to cost more than the earlier first chunk saves."""
+TEMPERATURE = 0.3
+"""Well below mlx-audio's default 0.9, which garbles the start of short utterances and
+sometimes carries on past the text. Transcribing 8 syntheses of one greeting back with
+Whisper: 4/8 verbatim at 0.9, 3/8 at 0.6, 7/8 at 0.3, with steadier pacing too."""
+
+STREAMING_INTERVAL_S = 0.24
+"""Seconds of audio per streamed chunk; mlx-audio rounds it to whole 12.5 Hz codec frames,
+so this is three. Measured on an M-series Mac, time to first audio falls with the interval
+(0.5 s -> ~150 ms, 0.24 s -> ~100 ms, 0.08 s -> ~50 ms) while the whole utterance takes the
+same ~1 s either way. Stopping at three frames leaves the streaming vocoder some context."""
 
 
 class Qwen3TtsSynthesizer:
@@ -128,6 +135,7 @@ class Qwen3TtsSynthesizer:
             instruct=design["description"],
             lang_code=design["language"],
             speed=speed,
+            temperature=TEMPERATURE,
             stream=True,
             streaming_interval=STREAMING_INTERVAL_S,
         ):
