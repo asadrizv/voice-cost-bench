@@ -361,31 +361,57 @@ async def test_transparency_confirms_the_tts_engine_the_kokoro_service_runs() ->
     assert (tts["confirmed"], tts["unconfirmed_reason"]) == (True, "")
 
 
-@pytest.mark.parametrize(
-    ("engines", "named"),
-    [
-        ([{"id": "kokoro", "model": "k"}, {"id": "orpheus", "model": "o"}], "'kokoro', 'orpheus'"),
-        ([], "none"),
-    ],
-)
-async def test_a_service_not_reporting_exactly_one_engine_leaves_its_default_unconfirmed(
-    engines: list[dict[str, str]], named: str
-) -> None:
+async def serving(engines: list[dict[str, str]]) -> FastAPI:
     info = FastAPI()
 
     @info.get("/v1/info")
     async def report() -> dict[str, list[dict[str, str]]]:
         return {"engines": engines}
 
-    async with run_asgi(info) as host:
-        stacks = await transparency_of(SETTINGS.model_copy(update={"kokoro_url": f"http://{host}"}))
+    return info
 
-    tts = stacks["selfhosted"]["tts"]
-    assert (tts["id"], tts["model"], tts["confirmed"]) == ("kokoro", "Kokoro-82M", False)
-    assert tts["unconfirmed_reason"] == (
-        f"the tts service reports engines {named}, and this lists one per kind; "
-        "listed from the catalogue's default"
+
+async def transparency_components(engines: list[dict[str, str]]) -> list[dict[str, object]]:
+    async with run_asgi(await serving(engines)) as host:
+        settings = SETTINGS.model_copy(update={"kokoro_url": f"http://{host}"})
+        app = create_app(settings, pipelines=StaticPipelines({}))
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            body = (await client.get("/transparency")).json()
+    return [c for c in body["pipelines"]["selfhosted"] if c["kind"] == "tts"]
+
+
+async def test_every_engine_a_service_runs_is_listed_and_confirmed() -> None:
+    """A German deployment runs Kokoro and Qwen3-TTS together; listing one per kind left
+    the public page saying the whole row was unconfirmed."""
+    tts = await transparency_components(
+        [{"id": "kokoro", "model": "hexgrad/Kokoro-82M"}, {"id": "qwen3-tts", "model": "q-8bit"}]
     )
+
+    assert [(c["id"], c["model"], c["confirmed"]) for c in tts] == [
+        ("kokoro", "hexgrad/Kokoro-82M", True),
+        ("qwen3-tts", "q-8bit", True),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("engines", "reason"),
+    [
+        ([], "the tts service reports no engine; listed from the catalogue's default"),
+        (
+            [{"id": "kokoro", "model": "k"}, {"id": "orpheus", "model": "o"}],
+            "the tts service runs 'orpheus', which has no catalogue entry; "
+            "listed from the catalogue's default",
+        ),
+    ],
+)
+async def test_a_service_running_something_uncatalogued_leaves_its_default_unconfirmed(
+    engines: list[dict[str, str]], reason: str
+) -> None:
+    [tts] = await transparency_components(engines)
+
+    assert (tts["id"], tts["model"], tts["confirmed"]) == ("kokoro", "Kokoro-82M", False)
+    assert tts["unconfirmed_reason"] == reason
 
 
 async def test_a_hung_service_leaves_its_default_unconfirmed_within_seconds() -> None:
