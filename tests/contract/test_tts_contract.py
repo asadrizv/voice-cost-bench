@@ -1,5 +1,6 @@
-"""TtsPort contract against ElevenLabs (mock transport) and both engines of the TTS
-service (real service code, stub synthesizers)."""
+"""TtsPort contract against ElevenLabs (mock transport), both Apple Silicon engines of the
+TTS service (real service code, stub synthesizers) and its CUDA engine (real backend code
+against a server speaking vLLM-Omni's speech API)."""
 
 from __future__ import annotations
 
@@ -20,12 +21,13 @@ from backend.infrastructure.tts.kokoro_tts import KokoroTts
 from gpu.kokoro_service.app import (
     VOICES_PATH,
     Qwen3TtsSynthesizer,
+    VllmOmniQwen3TtsSynthesizer,
     create_app,
     enabled_synthesizers,
     load_voices,
     to_pcm16,
 )
-from tests.integration.servers import run_asgi
+from tests.integration.servers import FakeVllmOmniSpeech, run_asgi
 
 SECONDS_PER_CHAR = 0.02
 GERMAN_VOICE = "qwen3-tts:clara_de"
@@ -112,10 +114,31 @@ async def qwen3_tts() -> AsyncIterator[Impl]:
         yield Impl(KokoroTts(f"http://{host}"), GERMAN_VOICE, StubQwen.hz)
 
 
+def omni_server(**kwargs: object) -> FakeVllmOmniSpeech:
+    return FakeVllmOmniSpeech(audio=lambda text: to_pcm16(fake_audio(text, StubQwen.hz)), **kwargs)  # type: ignore[arg-type]
+
+
+@asynccontextmanager
+async def omni_service(server: FakeVllmOmniSpeech) -> AsyncIterator[str]:
+    """The TTS service running Kokoro's stub beside its CUDA engine, whose model is a
+    vLLM-Omni server away."""
+    async with run_asgi(server.app()) as omni:
+        engines = (StubSynth, lambda: VllmOmniQwen3TtsSynthesizer(base_url=f"http://{omni}"))
+        async with run_asgi(create_app(engines, workers=2)) as host:
+            yield host
+
+
+@asynccontextmanager
+async def qwen3_tts_vllm() -> AsyncIterator[Impl]:
+    async with omni_service(omni_server()) as host:
+        yield Impl(KokoroTts(f"http://{host}"), GERMAN_VOICE, StubQwen.hz)
+
+
 IMPLEMENTATIONS: dict[str, Callable[[], AbstractAsyncContextManager[Impl]]] = {
     "elevenlabs": elevenlabs,
     "kokoro": kokoro,
     "qwen3-tts": qwen3_tts,
+    "qwen3-tts-vllm": qwen3_tts_vllm,
 }
 
 
@@ -236,6 +259,7 @@ async def test_the_service_reports_every_engine_it_can_route_to() -> None:
         (None, ["kokoro"]),
         ("qwen3-tts", ["qwen3-tts"]),
         ("kokoro, qwen3-tts", ["kokoro", "qwen3-tts"]),
+        ("kokoro,qwen3-tts-vllm", ["kokoro", "qwen3-tts"]),
     ],
 )
 def test_the_environment_says_which_engines_a_process_loads(
@@ -252,6 +276,92 @@ def test_an_engine_this_service_cannot_run_is_refused_at_startup(
 ) -> None:
     monkeypatch.setenv("TTS_ENGINES", "kokoro,orpheus")
     with pytest.raises(RuntimeError, match="orpheus"):
+        enabled_synthesizers()
+
+
+async def test_the_cuda_engine_asks_vllm_omni_to_stream_the_designed_voice_as_pcm() -> None:
+    """VoiceDesign carries the voice in `instructions`, and the stream has to be raw PCM at
+    this service's rate: a stream_format the server frames differently, or a rate it
+    resamples to, would reach the caller as noise under the x-sample-rate this service sets."""
+    server = omni_server()
+    async with omni_service(server) as host, httpx.AsyncClient(base_url=f"http://{host}") as client:
+        await client.post("/v1/synthesize", json={"text": "Guten Tag.", "voice": GERMAN_VOICE})
+
+    clara = load_voices(VOICES_PATH)["clara_de"]
+    assert server.requests[-1] == {
+        "model": VllmOmniQwen3TtsSynthesizer().served_model,
+        "input": "Guten Tag.",
+        "response_format": "pcm",
+        "stream": True,
+        "stream_format": "audio",
+        "sample_rate": 24000,
+        "task_type": "VoiceDesign",
+        "instructions": clara["description"],
+        "language": "German",
+    }
+
+
+async def test_a_vllm_omni_failure_before_any_audio_is_refused_with_a_status() -> None:
+    """A 200 whose body then stops reads to a caller as silence, so an engine that fails to
+    start generating must be answered with the status code, not with an empty stream."""
+    async with (
+        omni_service(omni_server()) as host,
+        httpx.AsyncClient(base_url=f"http://{host}") as client,
+    ):
+        response = await client.post("/v1/synthesize", json={"text": "FAIL", "voice": GERMAN_VOICE})
+
+    assert response.status_code == 500
+    assert "engine failed to start generation" in response.json()["error"]
+
+
+async def test_a_vllm_omni_stream_that_dies_mid_body_reaches_the_caller_as_a_failure() -> None:
+    """Raw PCM carries no error frame, so a dying engine can only cut the body. The caller
+    has to see a broken stream rather than a short, clean one it would play as the whole
+    utterance."""
+    async with omni_service(omni_server(truncates="Guten Tag, Frau Weber.")) as host:
+        tts = KokoroTts(f"http://{host}")
+        with pytest.raises(Exception, match="incomplete|peer closed|ChunkedEncoding"):
+            _ = [chunk async for chunk in tts.synthesize("Guten Tag, Frau Weber.", GERMAN_VOICE)]
+
+
+async def test_the_cuda_engine_refuses_a_speed_vllm_omni_cannot_stream() -> None:
+    """vLLM-Omni streams at speed 1.0 only; a request for another speed is refused here,
+    with the constraint named, rather than served at a speed the caller did not ask for."""
+    async with (
+        omni_service(omni_server()) as host,
+        httpx.AsyncClient(base_url=f"http://{host}") as client,
+    ):
+        response = await client.post(
+            "/v1/synthesize", json={"text": "Guten Tag.", "voice": GERMAN_VOICE, "speed": 1.5}
+        )
+
+    assert response.status_code == 500
+    assert "1.0" in response.json()["error"]
+
+
+async def test_the_cuda_engine_is_reported_as_qwen3_tts_by_the_runtime_that_served_it() -> None:
+    """The engine is the one the Apple Silicon backend runs, so /transparency names the same
+    catalogue entry; the model says which runtime produced the numbers, which the
+    catalogue's version -- fixed configuration -- cannot."""
+    async with (
+        omni_service(omni_server()) as host,
+        httpx.AsyncClient(base_url=f"http://{host}") as client,
+    ):
+        engines = (await client.get("/v1/info")).json()["engines"]
+
+    assert engines == [
+        {"id": "kokoro", "model": "hexgrad/Kokoro-82M"},
+        {"id": "qwen3-tts", "model": f"{VllmOmniQwen3TtsSynthesizer().served_model} (vLLM-Omni)"},
+    ]
+
+
+def test_two_runtimes_of_one_engine_cannot_be_loaded_at_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both would answer to the same voice prefix and the same catalogue entry, so which of
+    them served a call -- and which one /v1/info names -- would be arbitrary."""
+    monkeypatch.setenv("TTS_ENGINES", "qwen3-tts,qwen3-tts-vllm")
+    with pytest.raises(RuntimeError, match="qwen3-tts"):
         enabled_synthesizers()
 
 

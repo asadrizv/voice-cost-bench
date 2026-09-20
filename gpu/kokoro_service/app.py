@@ -17,12 +17,13 @@ import logging
 import os
 import threading
 import time
-from collections.abc import AsyncIterator, Iterator, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Protocol
 
+import httpx
 import numpy as np
 import yaml
 from fastapi import FastAPI
@@ -41,6 +42,9 @@ class UnknownVoice(ValueError):
 
 
 class Synthesizer(Protocol):
+    backend: str
+    """The id TTS_ENGINES names to load this one. It is the engine id where the engine has
+    a single runtime here, and `<engine>-<runtime>` where it has more than one."""
     engine: str
     """The engine's id in config/components.yaml, where /transparency names it from."""
     model: str
@@ -57,7 +61,7 @@ class Synthesizer(Protocol):
 
 
 class KokoroSynthesizer:
-    engine = "kokoro"
+    engine = backend = "kokoro"
     model = "hexgrad/Kokoro-82M"
     warmup_voice = "af_heart"
 
@@ -110,7 +114,7 @@ class Qwen3TtsSynthesizer:
     4.57). Voices are written descriptions in voices.yaml, so no recording is cloned. The
     CUDA backend is a separate engine; see gpu/README.md."""
 
-    engine = "qwen3-tts"
+    engine = backend = "qwen3-tts"
     model = os.environ.get("QWEN3_TTS_MODEL", "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit")
 
     def __init__(self) -> None:
@@ -142,6 +146,76 @@ class Qwen3TtsSynthesizer:
             yield np.asarray(result.audio, dtype=np.float32)
 
 
+class VllmOmniQwen3TtsSynthesizer:
+    """CUDA: the same Qwen3-TTS VoiceDesign model, served by a vLLM-Omni process on the GPU
+    and reached over its OpenAI-compatible speech API, so nothing here imports CUDA or holds
+    the card. The voices are the same written descriptions; see gpu/README.md for the
+    server this needs.
+
+    The reported model names the runtime as well as the weights: which runtime served a
+    benchmark run is not otherwise recoverable from provenance, since the catalogue's
+    version is fixed configuration and the two runtimes share an engine id."""
+
+    engine = "qwen3-tts"
+    backend = "qwen3-tts-vllm"
+
+    def __init__(
+        self,
+        base_url: str | None = None,
+        model: str | None = None,
+        client: httpx.Client | None = None,
+    ) -> None:
+        self.served_model = model or os.environ.get(
+            "QWEN3_TTS_VLLM_MODEL", "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+        )
+        self.model = f"{self.served_model} (vLLM-Omni)"
+        self._voices = load_voices(VOICES_PATH)
+        self.warmup_voice = next(iter(self._voices))
+        self._client = client or httpx.Client(
+            base_url=base_url or os.environ.get("QWEN3_TTS_VLLM_URL", "http://127.0.0.1:8004"),
+            timeout=httpx.Timeout(30.0, connect=5.0),
+        )
+
+    def speaks(self, voice: str) -> bool:
+        return voice in self._voices
+
+    def synthesize(self, text: str, voice: str, speed: float) -> Iterator[np.ndarray]:
+        if speed != 1.0:
+            raise ValueError(f"vLLM-Omni streams at speed 1.0 only; asked for {speed}")
+        design = self._voices[voice]
+        request = {
+            # Naming the model makes a server holding different weights refuse the request
+            # rather than answer it in another voice, or another language.
+            "model": self.served_model,
+            "input": text,
+            "response_format": "pcm",
+            "stream": True,
+            "stream_format": "audio",
+            "sample_rate": SAMPLE_RATE,
+            "task_type": "VoiceDesign",
+            "instructions": design["description"],
+            # The documented vocabulary is capitalised: Auto, English, German, ...
+            "language": design["language"].title(),
+        }
+        with self._client.stream("POST", "/v1/audio/speech", json=request) as response:
+            if response.status_code >= 400:
+                detail = response.read().decode(errors="replace")[:300]
+                raise RuntimeError(f"vLLM-Omni {response.status_code}: {detail}")
+            remainder = b""
+            for chunk in response.iter_bytes():
+                pcm = remainder + chunk
+                whole = len(pcm) - len(pcm) % 2
+                remainder = pcm[whole:]
+                if whole:
+                    yield to_float32(pcm[:whole])
+
+
+def to_float32(pcm: bytes) -> np.ndarray:
+    """Scaled the way to_pcm16 scales back, so audio the server has already encoded reaches
+    the caller as the samples it made rather than drifting an LSB through this service."""
+    return np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32767.0
+
+
 def load_voices(path: Path) -> dict[str, dict[str, str]]:
     raw = yaml.safe_load(path.read_text())
     voices = {
@@ -153,19 +227,34 @@ def load_voices(path: Path) -> dict[str, dict[str, str]]:
     return voices
 
 
-SYNTHESIZERS: tuple[type[Synthesizer], ...] = (KokoroSynthesizer, Qwen3TtsSynthesizer)
-"""Every engine this service can run; the API's catalogue must name each one."""
+SYNTHESIZERS: tuple[type[Synthesizer], ...] = (
+    KokoroSynthesizer,
+    Qwen3TtsSynthesizer,
+    VllmOmniQwen3TtsSynthesizer,
+)
+"""Every backend this service can run; the API's catalogue must name each engine behind
+them. Two backends may share an engine id, one runtime each."""
 
 
 def enabled_synthesizers() -> tuple[type[Synthesizer], ...]:
     """TTS_ENGINES says which of SYNTHESIZERS this process loads, Kokoro alone by default:
     a deployment that needs no German never downloads Qwen3-TTS's several GB of weights."""
-    by_id = {s.engine: s for s in SYNTHESIZERS}
-    wanted = [e.strip() for e in os.environ.get("TTS_ENGINES", KokoroSynthesizer.engine).split(",")]
+    by_id = {s.backend: s for s in SYNTHESIZERS}
+    wanted = [
+        e.strip() for e in os.environ.get("TTS_ENGINES", KokoroSynthesizer.backend).split(",")
+    ]
     unknown = [e for e in wanted if e not in by_id]
     if unknown:
         raise RuntimeError(f"TTS_ENGINES names {unknown}; this service runs {sorted(by_id)}")
-    return tuple(by_id[e] for e in wanted)
+    chosen = tuple(by_id[e] for e in wanted)
+    engines = [s.engine for s in chosen]
+    repeated = sorted({e for e in engines if engines.count(e) > 1})
+    if repeated:
+        raise RuntimeError(
+            f"TTS_ENGINES names two runtimes of {repeated}; a voice names the engine that "
+            "speaks it, so one engine here has to mean one runtime"
+        )
+    return chosen
 
 
 def route(voice: str, engines: Sequence[str]) -> tuple[str, str]:
@@ -185,12 +274,17 @@ class SynthesizeRequest(BaseModel):
     speed: float = Field(1.0, ge=0.5, le=2.0)
 
 
+def warm_up(synth: Synthesizer) -> None:
+    for _ in synth.synthesize(WARMUP_TEXT, synth.warmup_voice, 1.0):
+        pass
+
+
 def to_pcm16(audio: np.ndarray) -> bytes:
     return (np.clip(audio, -1.0, 1.0) * 32767).astype("<i2").tobytes()
 
 
 def create_app(
-    engines: Sequence[type[Synthesizer]] | None = None,
+    engines: Sequence[Callable[[], Synthesizer]] | None = None,
     workers: int = int(os.environ.get("KOKORO_WORKERS", "3")),
 ) -> FastAPI:
     factories = enabled_synthesizers() if engines is None else tuple(engines)
@@ -211,17 +305,20 @@ def create_app(
     async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         state["pool"] = ThreadPoolExecutor(max_workers=workers)
         state["slots"] = asyncio.Semaphore(workers)
+        # Each engine is readied on the pool, where a request's synthesis runs too, so an
+        # engine whose model answers over a socket is not waiting on a blocked event loop.
+        loop = asyncio.get_running_loop()
         for factory in factories:
-            synth = synthesizers.setdefault(factory.engine, factory())
-            for _ in synth.synthesize(WARMUP_TEXT, synth.warmup_voice, 1.0):
-                pass
+            synth = factory()
+            synthesizers[synth.engine] = synth
+            await loop.run_in_executor(state["pool"], warm_up, synth)  # type: ignore[arg-type]
         yield
         state["pool"].shutdown(wait=False)  # type: ignore[attr-defined]
 
     app = FastAPI(lifespan=lifespan)
 
     async def segments(req: SynthesizeRequest) -> AsyncIterator[bytes]:
-        engine, voice = route(req.voice, [f.engine for f in factories])
+        engine, voice = route(req.voice, list(synthesizers))
         synth = synthesizers[engine]
         if not synth.speaks(voice):
             raise UnknownVoice(f"voice {req.voice!r}: {engine} speaks no voice {voice!r}")
@@ -288,7 +385,7 @@ def create_app(
 
     @app.get("/v1/info")
     async def info() -> dict[str, list[dict[str, str]]]:
-        return {"engines": [{"id": f.engine, "model": f.model} for f in factories]}
+        return {"engines": [{"id": s.engine, "model": s.model} for s in synthesizers.values()]}
 
     @app.get("/health/deep")
     async def deep() -> JSONResponse:
