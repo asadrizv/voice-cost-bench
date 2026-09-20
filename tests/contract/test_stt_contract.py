@@ -22,6 +22,7 @@ from backend.domain.value_objects.audio import PCM16_24K_MONO, AudioChunk
 from backend.infrastructure.audio.wav import frames, read_wav
 from backend.infrastructure.stt.deepgram_stt import DeepgramStt
 from backend.infrastructure.stt.whisper_stt import WhisperStt
+from gpu.whisper_service import app as whisper_service
 from gpu.whisper_service.app import (
     WARMUP_PCM,
     TranscriptionSession,
@@ -430,6 +431,33 @@ async def test_the_cuda_engine_sends_the_realtime_server_the_model_and_the_calle
     assert np.abs(decoded - spoken).max() <= 1
 
 
+async def test_the_flush_is_answered_with_the_servers_final_text_not_the_running_deltas() -> None:
+    """transcription.done carries the generation's own text, which a model is free to have
+    revised; the deltas are a running transcript for interims, not the answer to a flush."""
+    corrected = "Hi, I need to speak to someone about my landlord, Mr Weber."
+
+    async with realtime_service(FakeVllmRealtime(text=UTTERANCE, corrected=corrected)) as stt:
+        stt.flush_timeout_s = 5.0
+        events = await asyncio.wait_for(collect(stt.stream(speech_then(FlushSignal()), "en")), 10)
+
+    assert [e.text for e in events if e.flushed] == [corrected]
+    interims = [e.text for e in events if not e.is_final]
+    assert max(len(text.split()) for text in interims) > 1  # deltas accumulate
+
+
+async def test_a_flush_waits_for_the_answer_the_realtime_server_is_still_generating() -> None:
+    """The server answers a commit when its generation ends, not when the audio does, and
+    what it then sends is the final -- so the wait is the point of the flush timeout."""
+    corrected = "Landlord dispute, Mrs Weber speaking."
+    server = FakeVllmRealtime(text=UTTERANCE, corrected=corrected, answer_delay_s=0.2)
+
+    async with realtime_service(server) as stt:
+        stt.flush_timeout_s = 5.0
+        events = await asyncio.wait_for(collect(stt.stream(speech_then(FlushSignal()), "en")), 10)
+
+    assert [e.text for e in events if e.flushed] == [corrected]
+
+
 async def test_a_realtime_server_that_answers_nothing_still_answers_the_flush_once() -> None:
     """A realtime server has no equivalent of an empty transcript: it simply says nothing
     until it has something. The caller is still owed exactly one answer to the flush."""
@@ -471,6 +499,26 @@ async def test_a_server_that_does_not_open_a_realtime_session_fails_the_utteranc
         session.feed(to_samples(WARMUP_PCM))
         with pytest.raises(RuntimeError, match="the model does not exist"):
             await asyncio.to_thread(session.finish)
+
+
+async def test_a_realtime_server_that_accepts_and_says_nothing_gives_the_model_thread_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A socket that is open but never greets would otherwise hold the one model thread for
+    as long as it stays open, and with it every call on this service."""
+    monkeypatch.setattr(whisper_service, "VLLM_OPEN_TIMEOUT_S", 0.3)
+    mute = FastAPI()
+
+    @mute.websocket("/v1/realtime")
+    async def accept_only(ws: WebSocket) -> None:
+        await ws.accept()
+        await asyncio.sleep(5.0)
+
+    async with run_asgi(mute) as host:
+        session = VllmVoxtralTranscriber(url=f"ws://{host}/v1/realtime").session()
+        session.feed(to_samples(WARMUP_PCM))
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(asyncio.to_thread(session.finish), 3)
 
 
 def test_a_realtime_server_that_is_not_there_fails_the_utterance_rather_than_emptying_it() -> None:

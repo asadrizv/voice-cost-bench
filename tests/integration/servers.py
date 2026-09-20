@@ -93,6 +93,11 @@ class FakeVllmRealtime:
     heard so far, and the rest when the generation ends."""
 
     text: str = ""
+    corrected: str = ""
+    """What transcription.done carries when the generation's final text differs from the
+    deltas it streamed, as a model that revises its running transcript leaves it."""
+    answer_delay_s: float = 0.0
+    """How long the generation takes to finish after the audio ends."""
     silent: bool = False
     """Accepts audio and answers nothing, as a server with no speech to report does."""
     fail_after_chunks: int | None = None
@@ -139,7 +144,10 @@ class FakeVllmRealtime:
                             await ws.send_json(
                                 {"type": "transcription.delta", "delta": _spoken(words, index)}
                             )
-                        await ws.send_json({"type": "transcription.done", "text": self.text})
+                        await asyncio.sleep(self.answer_delay_s)
+                        await ws.send_json(
+                            {"type": "transcription.done", "text": self.corrected or self.text}
+                        )
                         generating = False
 
         return app
