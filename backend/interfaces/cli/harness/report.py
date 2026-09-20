@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Any
 
 from backend.application.ports.rate_card_provider import TelephonyQuote
+from backend.domain.entities.call import Call
 from backend.domain.entities.cost import CostBreakdown
 from backend.domain.entities.latency import LatencyStage
 from backend.domain.services.cost_calculator import RateCard
@@ -35,6 +36,30 @@ def word_error_rate(reference: str, hypothesis: str) -> float:
 def _normalise(text: str) -> str:
     keep = [ch.lower() if ch.isalnum() or ch.isspace() else " " for ch in text]
     return " ".join("".join(keep).split())
+
+
+def _turn_rows(call: Call) -> list[dict[str, Any]]:
+    """One row per timed turn: the numbers the percentiles above are computed from, so a
+    reader who doubts a figure can recompute it and a tail nobody can see is not the only
+    record of it. Untimed turns -- the greeting, and any the agent never answered -- carry
+    no latency and are left out rather than entered as zero."""
+    return [
+        {
+            "call": call.id,
+            "index": turn.index,
+            "started_at": turn.started_at.isoformat() if turn.started_at else None,
+            "interrupted": turn.interrupted,
+            "latency_ms": {
+                stage.value: round(turn.latency.get(stage), 1) for stage in LatencyStage
+            },
+            "perceived_delay_ms": round(turn.latency.perceived_delay, 1),
+            "cost_usd": turn.cost.as_dict(),
+            "usage": asdict(turn.usage),
+            "concurrent_calls": turn.usage.concurrent_calls,
+        }
+        for turn in call.turns
+        if turn.latency is not None
+    ]
 
 
 def summarise_level(
@@ -80,6 +105,7 @@ def summarise_level(
         "calls_rejected": run.rejected,
         "reply_timeouts": run.reply_timeouts,
         "turns": len(samples),
+        "turn_rows": [row for call in calls for row in _turn_rows(call)],
         "call_minutes": round(minutes, 3),
         "cost_usd": cost.as_dict(),
         "cost_per_minute_usd": per_minute["total"],

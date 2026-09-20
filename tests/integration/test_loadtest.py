@@ -17,6 +17,7 @@ from backend.application.ports.rate_card_provider import TelephonyQuote
 from backend.application.services.concurrency_supervisor import ConcurrencySupervisor
 from backend.application.services.endpointing import EndpointerKind
 from backend.application.use_cases.describe_components import DescribedComponent
+from backend.domain.entities.latency import LatencyStage
 from backend.domain.value_objects.audio import PCM16_24K_MONO, AudioChunk
 from backend.domain.value_objects.pipeline_kind import PipelineKind
 from backend.infrastructure.config.settings import MissingServingConfig, Settings
@@ -610,3 +611,26 @@ def test_provenance_of_an_api_run_budgets_no_gpu_memory() -> None:
     )
 
     assert info["gpu_memory_budget"] is None
+
+
+@needs_audio
+async def test_a_level_publishes_a_row_per_timed_turn_beside_the_percentiles() -> None:
+    """#10 asks for raw per-turn data, not only percentiles: a reader who disagrees with a
+    figure has to be able to recompute it, and a tail nobody can see is a tail nobody can
+    check. The greeting has no caller utterance to time from, so it carries no row."""
+    conversation = one_turn()
+    container = local_container(supervisors={PipelineKind.SELFHOSTED: ConcurrencySupervisor(2)})
+    runner = level_runner(container, conversation)
+
+    run = await runner.run(concurrency=2, duration_s=1)
+    summary = report.summarise_level(run, conversation, simulated=True)
+
+    rows = summary["turn_rows"]
+    assert len(rows) == summary["turns"] > 0
+    assert {r["call"] for r in rows} == {c.id for c in run.calls}
+    for row in rows:
+        assert row["index"] >= 1  # the greeting is turn 0 and is never timed
+        assert row["perceived_delay_ms"] > 0
+        assert set(row["latency_ms"]) == {stage.value for stage in LatencyStage}
+        assert row["cost_usd"]["total"] > 0
+        assert row["concurrent_calls"] >= 1
