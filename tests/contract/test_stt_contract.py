@@ -15,6 +15,7 @@ from pathlib import Path
 import httpx
 import numpy as np
 import pytest
+from fastapi import FastAPI, WebSocket
 
 from backend.application.ports.stt_port import FlushSignal, SttPort, TranscriptEvent
 from backend.domain.value_objects.audio import PCM16_24K_MONO, AudioChunk
@@ -441,6 +442,26 @@ async def test_a_realtime_server_that_fails_mid_utterance_does_not_answer_the_fl
                 events.append(event)
 
     assert [e for e in events if e.flushed or e.is_final] == []
+
+
+async def test_a_server_that_does_not_open_a_realtime_session_fails_the_utterance() -> None:
+    """Something else answering on that port -- another vLLM endpoint, a proxy -- would
+    otherwise take the audio and never transcribe it."""
+    other = FastAPI()
+
+    @other.websocket("/v1/realtime")
+    async def greet(ws: WebSocket) -> None:
+        await ws.accept()
+        await ws.send_json({"type": "error", "error": "the model does not exist"})
+        await asyncio.sleep(1.0)
+
+    async with run_asgi(other) as host:
+        session = VllmVoxtralTranscriber(
+            url=f"ws://{host}/v1/realtime", flush_timeout_s=FLUSH_TIMEOUT_S
+        ).session()
+        session.feed(to_samples(WARMUP_PCM))
+        with pytest.raises(RuntimeError, match="the model does not exist"):
+            await asyncio.to_thread(session.finish)
 
 
 def test_a_realtime_server_that_is_not_there_fails_the_utterance_rather_than_emptying_it() -> None:
