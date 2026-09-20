@@ -132,6 +132,41 @@ repository or in emitted events, and the schema test fails if any table gains a 
 column. On the `api` pipeline, audio is streamed to Deepgram and ElevenLabs, so their
 retention terms also apply.
 
+## EU-only deployment
+
+`EU_ONLY=true` refuses to start unless every catalogued component a call could touch is
+EU-resident (`leaves_eu: false` in `config/components.yaml`). The error names each
+offender — vendor and region — so a misconfiguration is fixed before a call, not after.
+A law firm must know and bind every subcontractor that sees client data (§43e BRAO).
+
+A call picks its pipeline in the browser, so the profile also closes that choice: it
+serves `PIPELINE` and nothing else, and `/token` and the agent both refuse any other,
+naming the profile. Otherwise a toggle would route a caller straight past the check.
+`GET /transparency` then reports `"eu_only": true` and lists only the pipeline a call can
+select, so the claim is checked against the running configuration rather than taken on
+trust.
+
+With the shipped catalogue an EU-only deployment is `PIPELINE=selfhosted` plus:
+
+- **An EU carrier.** Twilio and Telnyx are catalogued `us`. sipgate is the German one, and
+  it sells inbound by the month rather than by the minute, so it has no `price_usd` in
+  `config/rates.yaml` — enter your contracted per-minute rate before selecting it.
+- **Your own LiveKit.** `LIVEKIT_URL` pointing at `*.livekit.cloud` selects the managed
+  SFU, which routes media through its nearest edge.
+- **EU hosts.** `hosts:` in `config/components.yaml` states where the GPU host and the app
+  host run; the shipped entries assume the EU (the priced RunPod L40S is in the
+  Netherlands). Correct them for your deployment.
+
+The profile cannot yet speak German on one L40S. Kokoro has no German voice, so German
+needs Qwen3-TTS, and ElevenLabs is not available under the profile: Qwen3-TTS (5.48 GiB)
+beside Voxtral (9.98 GiB) and the LLM's configured 0.72 share of the card (34.56 GiB)
+comes to 50.02 GiB, 2.02 GiB more than an L40S holds. Today that stack runs on Apple
+Silicon (a CUDA backend is #32); on one L40S it needs a smaller LLM share, which is a
+change to make against #10's measurements rather than to assume. Startup reports an
+over-committed card as an error under the profile, and only a warning without it, because
+the profile has no API pipeline to fall back on — it still starts, since every memory
+figure is an estimate until #10 measures one.
+
 ## Tests
 
 ```bash
