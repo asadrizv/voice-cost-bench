@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from backend.application.ports.component_catalogue import ComponentKind
 from backend.application.ports.pipeline_provider import Pipeline
 from backend.application.use_cases.handle_call_turn import TurnRequest
+from backend.application.use_cases.start_call import VoiceNotAvailable
 from backend.domain.entities.latency import TurnTimeline
 from backend.domain.value_objects.pipeline_kind import PipelineKind
 from backend.infrastructure.config.component_catalogue import (
@@ -24,15 +25,24 @@ from backend.infrastructure.config.component_catalogue import (
     NotEuResident,
 )
 from backend.infrastructure.config.settings import Settings
+from backend.infrastructure.persistence.inmemory_call_repository import InMemoryCallRepository
 from backend.infrastructure.pipeline_factory import SELFHOSTED_ENGINES
-from backend.interfaces.container import load_static_config
+from backend.interfaces.container import build_container, load_static_config
 from backend.interfaces.http.app import create_app
 from gpu.kokoro_service.app import SYNTHESIZERS, KokoroSynthesizer
 from gpu.kokoro_service.app import create_app as kokoro_app
 from gpu.whisper_service.app import TRANSCRIBERS, FasterWhisperTranscriber
 from gpu.whisper_service.app import create_app as whisper_app
 from tests.config_fixtures import config_copy
-from tests.fakes import FakeClock, FakeLlm, FakeTts, RecordingOutput, ScriptedStt, StaticPipelines
+from tests.fakes import (
+    FakeClock,
+    FakeLlm,
+    FakeTts,
+    NullMetrics,
+    RecordingOutput,
+    ScriptedStt,
+    StaticPipelines,
+)
 from tests.integration.servers import run_asgi
 
 SETTINGS = Settings(
@@ -877,3 +887,25 @@ def test_an_unproven_card_stays_a_warning_even_under_the_eu_only_profile(
     [record] = [r for r in caplog.records if r.levelno >= logging.WARNING]
     assert record.levelno == logging.WARNING
     assert "unknown" in record.getMessage()
+
+
+async def test_a_deployment_without_the_german_voice_refuses_the_call_not_the_greeting(
+    tmp_path: Path,
+) -> None:
+    """The German persona asks for qwen3-tts:clara_de and TTS_ENGINES defaults to Kokoro
+    alone. Left to synthesis this failed on the greeting turn, so the caller heard nothing;
+    now the container refuses the call with a reason the browser can show."""
+    async with run_asgi(await serving([{"id": "kokoro", "model": "hexgrad/Kokoro-82M"}])) as host:
+        settings = SETTINGS.model_copy(
+            update={"config_dir": config_copy(tmp_path), "kokoro_url": f"http://{host}"}
+        )
+        container = build_container(settings, NullMetrics(), repository=InMemoryCallRepository())  # type: ignore[arg-type]
+
+        with pytest.raises(VoiceNotAvailable, match="qwen3-tts"):
+            await container.start_call.execute(PipelineKind.SELFHOSTED, "law_firm_de")
+
+        # English is spoken by the engine that is running, so it is unaffected.
+        english = await container.start_call.execute(PipelineKind.SELFHOSTED, "law_firm")
+
+    assert english.persona.id == "law_firm"
+    assert await container.repository.list() == [english.call]

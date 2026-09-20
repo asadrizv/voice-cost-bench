@@ -212,6 +212,11 @@ def build_container(
         if supervisors is not None
         else process_supervisors(settings.selfhosted_max_concurrency)
     )
+    running_engines = (
+        None
+        if settings.simulate_providers
+        else HttpRunningEngines(service_info_urls(settings), clock)
+    )
     return Container(
         settings=settings,
         clock=clock,
@@ -230,6 +235,7 @@ def build_container(
             supervisors,
             metrics,
             clock,
+            engines=running_engines,
             dev_spend_limit_usd=settings.dev_spend_limit_usd,
         ),
         handle_turn=HandleCallTurn(repository, metrics, calculator, clock),
@@ -238,10 +244,5 @@ def build_container(
         compare=ComparePipelines(repository),
         turn_model=turn_model,
         gpu_budget=static.gpu_budget,
-        describe_components=DescribeComponents(
-            catalogue,
-            None
-            if settings.simulate_providers
-            else HttpRunningEngines(service_info_urls(settings), clock),
-        ),
+        describe_components=DescribeComponents(catalogue, running_engines),
     )

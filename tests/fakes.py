@@ -8,8 +8,10 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+from backend.application.ports.component_catalogue import ComponentKind
 from backend.application.ports.llm_port import ChatMessage, LlmEvent, TokenDelta, TokenUsage
 from backend.application.ports.pipeline_provider import Pipeline
+from backend.application.ports.running_engines import Engine, EngineReportUnavailable
 from backend.application.ports.stt_port import FlushSignal, TranscriptEvent
 from backend.domain.entities.persona import Persona, SamplingParams
 from backend.domain.services.cost_calculator import PipelineRates, RateCard
@@ -203,3 +205,21 @@ def speech(ms: int = 20) -> AudioChunk:
 
 def silence(ms: int = 20) -> AudioChunk:
     return AudioChunk(b"\x00\x00" * (16 * ms))
+
+
+class StaticEngines:
+    """What the self-hosted services report running, without asking one."""
+
+    def __init__(self, engines: dict[ComponentKind, list[Engine]]) -> None:
+        self._engines = engines
+
+    async def report(self, kind: ComponentKind) -> list[Engine]:
+        return self._engines[kind]
+
+
+class UnreachableEngines:
+    def __init__(self, reason: str = "ConnectError") -> None:
+        self._reason = reason
+
+    async def report(self, kind: ComponentKind) -> list[Engine]:
+        raise EngineReportUnavailable(self._reason)

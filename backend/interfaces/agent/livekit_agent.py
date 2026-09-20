@@ -18,7 +18,7 @@ from livekit.agents import AutoSubscribe, JobContext, JobExecutorType, WorkerOpt
 
 from backend.application.services.concurrency_supervisor import CapacityExceeded
 from backend.application.services.endpointing import EndpointerKind
-from backend.application.use_cases.start_call import BudgetExceeded
+from backend.application.use_cases.start_call import BudgetExceeded, VoiceNotAvailable
 from backend.domain.value_objects.audio import AudioChunk
 from backend.domain.value_objects.pipeline_kind import PipelineKind
 from backend.infrastructure.config.settings import Settings, get_settings
@@ -113,6 +113,7 @@ async def entrypoint(ctx: JobContext) -> None:
             CapacityExceeded,
             MissingCredentials,
             PipelineNotSelectable,
+            VoiceNotAvailable,
         ) as exc:
             log.warning("call rejected: %s", exc)
             await _status(ctx, state="rejected", reason=str(exc))
