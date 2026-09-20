@@ -29,10 +29,12 @@ from backend.infrastructure.config.settings import Settings
 from backend.infrastructure.pricing.yaml_rate_card import YamlRateCardProvider
 from backend.interfaces.container import (
     build_catalogue,
+    build_container,
     build_gpu_budget_check,
     load_static_config,
 )
 from tests.config_fixtures import config_copy
+from tests.fakes import NullMetrics
 
 GPU = "L40S"
 
@@ -372,6 +374,20 @@ def test_startup_warns_when_the_configured_engines_overrun_the_card(
 
     [warning] = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert warning.getMessage().startswith("GPU memory budget: L40S 48.00 GiB:")
+    assert warning.getMessage().endswith("1.60 GiB short (does not fit)")
+
+
+def test_every_process_that_builds_a_container_gets_the_same_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The warning used to live only on the path the agent and the harness take, so the
+    API server ran an over-committed card in silence."""
+    settings = Settings(database_url="", config_dir=config_with(tmp_path, "0.95"))
+
+    with caplog.at_level(logging.WARNING):
+        build_container(settings, NullMetrics())  # type: ignore[arg-type]
+
+    [warning] = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert warning.getMessage().endswith("1.60 GiB short (does not fit)")
 
 
