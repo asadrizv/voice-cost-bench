@@ -353,9 +353,10 @@ def create_app(
         # engine whose model answers over a socket is not waiting on a blocked event loop.
         loop = asyncio.get_running_loop()
         for factory in factories:
-            # The factory loads the weights, so it belongs on the pool too: several GB read
-            # on the event loop leaves the service unable to answer /health while it runs.
-            synth = await loop.run_in_executor(state["pool"], factory)  # type: ignore[arg-type]
+            # Loaded here, however long it blocks: MLX gives each thread its own GPU stream,
+            # so weights loaded on a pool thread are unreachable from the other worker --
+            # "There is no Stream(gpu, 2) in current thread", on a real call.
+            synth = factory()
             synthesizers[synth.engine] = synth
             await loop.run_in_executor(state["pool"], warm_up, synth)  # type: ignore[arg-type]
         yield
