@@ -67,6 +67,7 @@ until curl -sf localhost:8000/health >/dev/null; do sleep 5; done
 
 # Each speech server claims a share of the same card; what is left for the LLM is what
 # SERVING_CONFIG asks for, so these fractions and that file are set against each other.
+# vLLM-Omni's deploy config gives 0.3 of the card to each of two stages besides.
 if [[ "$whisper_backend" == voxtral-vllm ]]; then
   vllm serve "$voxtral_model" --tokenizer-mode mistral --enforce-eager --port 8003 \
     --gpu-memory-utilization "${VOXTRAL_GPU_FRACTION:-0.34}" > /workspace/voxtral.log 2>&1 &

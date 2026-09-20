@@ -150,21 +150,25 @@ On a 48 GiB L40S, with the shares this repo ships:
 |---|---|---|
 | LLM, `gpu-memory-utilization: 0.72` in `config/serving/qwen-9b-l40s.yaml` | 0.72 | 34.56 |
 | `voxtral-vllm` server, `VOXTRAL_GPU_FRACTION` | 0.34 | 16.32 |
-| `qwen3-tts-vllm` server, `QWEN3_TTS_GPU_FRACTION` | 0.30 | 14.40 |
+| `qwen3-tts-vllm` server, `QWEN3_TTS_GPU_FRACTION` | 0.30 a stage, and it runs two | 28.80 |
 | `kokoro_service`, when Kokoro is loaded too | -- | ~1.0 |
-| **Total** | | **~66.3, on a 48 GiB card** |
+| **Total** | | **~80.7, on a 48 GiB card** |
 
 The two defaults are not padding: vLLM's own Voxtral recipe asks for a GPU with **>= 16 GiB**
-for the bf16 weights, and vLLM-Omni's bundled `qwen3_tts.yaml` gives its first stage 0.3.
+for the bf16 weights, and vLLM-Omni's bundled `qwen3_tts.yaml` gives 0.3 to each of its two
+stages (talker and code2wav), which is where 0.60 comes from -- whether the one
+`--gpu-memory-utilization` these files pass overrides both is untested.
 Something has to give, and the choice belongs to whoever runs the benchmark:
 
-- **Shrink the LLM.** Both speech servers plus Kokoro leave about 16 GiB, which a 9B model
-  in bf16 does not fit into; it would have to be a quantised or smaller checkpoint, and that
-  is a different LLM in the comparison, not the same one served differently.
+- **Shrink everything.** The two speech servers and Kokoro claim about 46 of the 48 GiB
+  between them, so their shares have to come down before the LLM has room at all, and a 9B
+  model in bf16 needs about 18 GiB of whatever is left -- which means a quantised or smaller
+  checkpoint, and that is a different LLM in the comparison, not the same one served
+  differently.
 - **Serve speech from a second card**, and say so beside any cost number: the L40S hour in
   `config/rates.yaml` prices one card.
-- **Run one CUDA speech engine, not both.** Voxtral with Kokoro's English voices, or
-  Whisper with Qwen3-TTS German, each fits with an LLM share around 0.5.
+- **Run one CUDA speech engine, not both.** Voxtral with Kokoro's English voices leaves
+  the LLM about 0.5 of the card; Qwen3-TTS German with Whisper leaves it about 0.3.
 
 This is the same wall #30's budget already hit for the Apple Silicon numbers: Qwen3-TTS
 (5.48 GiB) beside Voxtral (9.98 GiB) and the LLM's 0.72 share come to 50.02 GiB, 2.02 GiB
@@ -184,7 +188,8 @@ has been measured on an L40S (#10).
   capitalised `language` vocabulary come from vLLM-Omni's `docs/serving/speech_api.md` and
   its own client; the byte order of that PCM is stated nowhere and is read here as
   little-endian. `--deploy-config vllm_omni/deploy/qwen3_tts.yaml` is a repo-relative path in
-  the upstream example, and whether it resolves inside `vllm/vllm-omni:v0.28.0` is untested.
+  the upstream example: whether it resolves inside `vllm/vllm-omni:v0.28.0`, and whether the
+  command line's share overrides the 0.3 it gives each stage, are both untested.
 - **A mid-stream failure of either server is only partly recoverable.** The TTS service pulls
   the first PCM chunk before committing a 200, so an engine that fails to start generating is
   refused with a status; one that dies after the first chunk can only truncate the stream,

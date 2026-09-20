@@ -64,7 +64,8 @@ services:
     ipc: host
 
   # `--profile qwen3-tts`, with TTS_ENGINES=kokoro,qwen3-tts-vllm. The image has no default
-  # entrypoint, so the serve command follows it, and --omni selects the omni engine.
+  # entrypoint, so the serve command follows it, and --omni selects the omni engine. Its
+  # deploy config gives 0.3 of the card to each of two stages; see gpu/README.md.
   qwen3-tts-vllm:
     <<: *gpu
     profiles: [qwen3-tts]
