@@ -831,3 +831,20 @@ def test_the_eu_only_error_names_every_offender_in_one_sentence(tmp_path: Path) 
         "api llm 'openai' (OpenAI, us), api tts 'elevenlabs' (ElevenLabs, us). "
         "Select EU-resident components or unset EU_ONLY."
     )
+
+
+def test_an_unproven_card_stays_a_warning_even_under_the_eu_only_profile(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An unknown verdict is not an overrun: an Ollama deployment reserves no fixed share,
+    and logging that as an error teaches operators to ignore the one that means it."""
+    settings = eu_settings(eu_config(tmp_path)).model_copy(
+        update={"llm_server": "ollama", "vllm_model": "qwen3.5:9b"}
+    )
+
+    with caplog.at_level(logging.WARNING):
+        validate_static_config(settings)
+
+    [record] = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert record.levelno == logging.WARNING
+    assert "unknown" in record.getMessage()

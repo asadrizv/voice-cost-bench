@@ -143,12 +143,13 @@ def build_gpu_budget_check(settings: Settings, catalogue: EngineCatalogue) -> Ch
 def warn_over_budget(check: CheckGpuBudget, components: Iterable[Component], eu_only: bool) -> None:
     """Warns rather than refuses: every figure behind the verdict is an estimate until #10
     measures one on an L40S, and a wrong estimate must not stop a run. Under the EU-only
-    profile the same estimate is an error: no other pipeline may take the calls, so a card
-    that cannot hold the stack leaves nothing to answer them with."""
+    profile a definite overrun is an error: no other pipeline may take the calls, so a card
+    that cannot hold the stack leaves nothing to answer them with. An unknown verdict stays
+    a warning; an error nobody can act on teaches operators to ignore the ones they can."""
     budget = check.execute(components)
     if budget is None or budget.verdict is BudgetVerdict.FITS:
         return
-    if eu_only:
+    if eu_only and budget.verdict is BudgetVerdict.DOES_NOT_FIT:
         log.error("EU_ONLY has no pipeline to fall back on. %s", budget.summary())
     else:
         log.warning("GPU memory budget: %s", budget.summary())
