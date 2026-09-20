@@ -151,3 +151,22 @@ def test_the_share_a_server_is_started_with_is_the_share_the_budget_reads(
     assert reported is not None
     assert compose == script == Decimal(str(reported)) / stages
     assert documented is not None and Decimal(documented.group(1)) == compose
+
+
+def test_no_readiness_wait_in_the_pod_script_can_hang_forever() -> None:
+    """A pod bills by the second. An `until curl ...; do sleep` around a server that died
+    on a bad flag or an OOM waits for a health check that will never pass, with the reason
+    sitting in a log nobody is reading -- so every wait goes through one bounded helper."""
+    script = (REPO_ROOT / "gpu" / "runpod" / "start.sh").read_text()
+
+    waits = re.findall(r"^\s*until .*?^\s*done", script, re.M | re.S)
+    assert len(waits) == 1, f"a wait outside the bounded helper: {waits}"
+    assert "deadline" in waits[0] and "exit 1" in waits[0]
+    # Every server the script starts is waited for through it.
+    assert re.findall(r"^\s*ready (\w[\w-]*)", script, re.M) == [
+        "llm",
+        "voxtral",
+        "qwen3-tts",
+        "stt",
+        "tts",
+    ]

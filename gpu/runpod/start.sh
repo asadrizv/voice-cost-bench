@@ -14,6 +14,21 @@ if [[ ! -f "$serving" ]]; then
   exit 1
 fi
 
+# A pod bills by the second, so nothing here waits forever: a server that died on a bad
+# flag or an OOM never answers /health, and the reason is in its log rather than on stdout.
+ready() {
+  local name="$1" url="$2" log="$3" deadline=$((SECONDS + ${READY_TIMEOUT_S:-900}))
+  until curl -sf "$url" >/dev/null; do
+    if (( SECONDS > deadline )); then
+      echo "$name did not answer $url within ${READY_TIMEOUT_S:-900}s; last of $log:" >&2
+      tail -n 40 "$log" >&2 || true
+      exit 1
+    fi
+    sleep 5
+  done
+  echo "$name ready"
+}
+
 whisper_backend="${WHISPER_BACKEND:-faster-whisper}"
 tts_engines="${TTS_ENGINES:-kokoro}"
 voxtral_model="${VOXTRAL_VLLM_MODEL:-mistralai/Voxtral-Mini-4B-Realtime-2602}"
@@ -63,7 +78,7 @@ PY
 
 vllm serve --config "$serving" --port 8000 > /workspace/vllm.log 2>&1 &
 # Start the small models after vLLM has claimed its gpu-memory-utilization share.
-until curl -sf localhost:8000/health >/dev/null; do sleep 5; done
+ready llm http://localhost:8000/health /workspace/vllm.log
 
 # Each speech server claims a share of the same card; what is left for the LLM is what
 # SERVING_CONFIG asks for, so these fractions and that file are set against each other.
@@ -71,17 +86,18 @@ until curl -sf localhost:8000/health >/dev/null; do sleep 5; done
 if [[ "$whisper_backend" == voxtral-vllm ]]; then
   vllm serve "$voxtral_model" --tokenizer-mode mistral --enforce-eager --port 8003 \
     --gpu-memory-utilization "${VOXTRAL_GPU_FRACTION:-0.34}" > /workspace/voxtral.log 2>&1 &
-  until curl -sf localhost:8003/health >/dev/null; do sleep 5; done
+  ready voxtral http://localhost:8003/health /workspace/voxtral.log
 fi
 if [[ "$tts_engines" == *qwen3-tts-vllm* ]]; then
   /workspace/omni-venv/bin/vllm serve "$qwen3_tts_model" --omni --trust-remote-code \
     --enforce-eager --port 8004 --deploy-config vllm_omni/deploy/qwen3_tts.yaml \
     --gpu-memory-utilization "${QWEN3_TTS_GPU_FRACTION:-0.30}" > /workspace/qwen3-tts.log 2>&1 &
-  until curl -sf localhost:8004/health >/dev/null; do sleep 5; done
+  ready qwen3-tts http://localhost:8004/health /workspace/qwen3-tts.log
 fi
 
 uvicorn gpu.whisper_service.app:app --factory --host 0.0.0.0 --port 8001 > /workspace/whisper.log 2>&1 &
 uvicorn gpu.kokoro_service.app:app --factory --host 0.0.0.0 --port 8002 > /workspace/kokoro.log 2>&1 &
-until curl -sf localhost:8001/health/deep >/dev/null && curl -sf localhost:8002/health/deep >/dev/null; do sleep 3; done
+ready stt http://localhost:8001/health/deep /workspace/whisper.log
+ready tts http://localhost:8002/health/deep /workspace/kokoro.log
 echo "every selected service warm"
 wait
