@@ -60,6 +60,29 @@ speaks, at a 480 ms transcription delay, and detects the language itself. Its 4-
 are ~3.1 GB, downloaded on first load, so a deployment that leaves `WHISPER_BACKEND` alone
 never fetches them.
 
+### Voxtral against Whisper, measured (#29)
+
+`tests/integration/test_voxtral_stt_model.py` drives both Apple Silicon engines through
+this service's socket at caller pace and prints these; rerun it rather than trusting the
+table. One M5 Pro, `whisper-large-v3-turbo` against `Voxtral-Mini-4B-Realtime-2602-4bit`,
+on the six scripted intake turns. **The fixture audio is synthetic**, so the error rates
+compare the two engines and are not publishable numbers (`fixtures/wer/README.md`).
+
+| | mean WER | median time to final | worst |
+|---|---|---|---|
+| English, `mlx` | 0.065 | 186 ms | 296 ms |
+| English, `voxtral` | 0.065 | 511 ms | 653 ms |
+| German, `mlx` | 0.143 | 179 ms | 284 ms |
+| German, `voxtral` | 0.143 | 516 ms | 747 ms |
+
+Turn for turn the two transcripts differ only in spelling out an e-mail address, so on this
+corpus Voxtral buys no accuracy, and it answers a flush roughly 330 ms later because closing
+its session drains the transcription delay it deliberately runs behind. What it does buy is
+a bounded cost per second of speech: Whisper's final grows with the utterance (182 ms at
+4.3 s, 500 ms at 16.9 s) while Voxtral's barely moves (456 ms, 683 ms), and its interims are
+a running transcript rather than a whole re-transcription. For receptionist turns of a few
+seconds, Whisper is the faster engine on this hardware; the CUDA comparison is #32.
+
 ## TTS engines
 
 `kokoro_service` routes each request to an engine by its voice id: `<engine>:<voice>` goes

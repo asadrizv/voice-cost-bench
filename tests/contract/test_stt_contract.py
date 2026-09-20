@@ -5,6 +5,7 @@ code with the model swapped for a stub)."""
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
@@ -199,6 +200,27 @@ async def test_whisper_service_drops_leading_silence_and_passes_language() -> No
     assert language == "de"
 
 
+async def test_a_silent_caller_is_flushed_without_whisper_being_asked() -> None:
+    """Whisper answers silence with an invented "Thank you.", and the caller is silent for
+    as long as the agent talks, so the buffer's gate has to keep it away from the model."""
+    stub = StubTranscriber()
+
+    async def silence_then_flush() -> AsyncIterator[AudioChunk | FlushSignal]:
+        for _ in range(100):  # 2 s of silence while the agent was talking
+            yield AudioChunk(b"\x00\x00" * 320)
+        yield FlushSignal()
+        await asyncio.sleep(0.5)
+
+    async with run_asgi(create_app(lambda: stub, workers=1, interim_interval_s=0.0)) as host:
+        warmed = len(stub.calls)
+        events = await collect(
+            WhisperStt(f"ws://{host}/v1/stream").stream(silence_then_flush(), "de")
+        )
+
+    assert [(e.text, e.flushed) for e in events] == [("", True)]
+    assert stub.calls[warmed:] == []
+
+
 async def test_a_silent_caller_is_flushed_without_the_streaming_model_being_opened() -> None:
     """Voxtral invents nothing on silence, so it needs no confidence filter; what it does
     need is to be kept off the silence, which costs it real decoding time."""
@@ -219,15 +241,84 @@ async def test_a_silent_caller_is_flushed_without_the_streaming_model_being_open
     assert transcriber.sessions[warmed:] == []
 
 
-async def test_speech_too_quiet_for_whisper_still_opens_a_voxtral_session() -> None:
-    """Voxtral reads fixture speech attenuated well below Whisper's -45 dBFS gate, so its
-    own gate has to sit lower or quiet callers are dropped before the model sees them."""
-    transcriber = StubStreamingTranscriber()
+class SlowStubSession(StubSession):
+    """Blocks inside the model until released, and records any second piece of work that
+    gets in while it is there."""
+
+    def __init__(self, release: threading.Event) -> None:
+        super().__init__()
+        self._release = release
+        self.inside = 0
+        self.overlapped = False
+
+    def _enter(self) -> None:
+        self.inside += 1
+        self.overlapped = self.overlapped or self.inside > 1
+
+    def advance(self) -> str:
+        self._enter()
+        self._release.wait(5)
+        self.inside -= 1
+        return super().advance()
+
+    def finish(self) -> str:
+        self._enter()
+        self.inside -= 1
+        return super().finish()
+
+
+async def test_a_flush_waits_for_the_interim_already_inside_the_streaming_model() -> None:
+    """mlx-audio's session decodes on one thread and keeps its state between steps, so a
+    final that started while an interim was still running would corrupt the utterance."""
+    release = threading.Event()
+
+    class BlockingTranscriber(StubStreamingTranscriber):
+        def session(self) -> TranscriptionSession:
+            self.sessions.append(SlowStubSession(release))
+            return self.sessions[-1]
+
+    transcriber = BlockingTranscriber()
+
+    async def speech_then_flush() -> AsyncIterator[AudioChunk | FlushSignal]:
+        async for item in speech_then():
+            yield item
+        yield FlushSignal()
+        asyncio.get_running_loop().call_later(0.3, release.set)
+        await asyncio.sleep(1.0)
+
+    async with run_asgi(create_app(lambda: transcriber, workers=3, interim_interval_s=0.0)) as host:
+        stt = WhisperStt(f"ws://{host}/v1/stream")
+        events = await asyncio.wait_for(collect(stt.stream(speech_then_flush(), "en")), 15)
+
+    assert [e.text for e in events if e.flushed] == [UTTERANCE]
+    assert not any(s.overlapped for s in transcriber.sessions)
+
+
+def speech_peaking_at(dbfs: float) -> bytes:
+    """The fixture utterance rescaled so its loudest 20 ms frame sits at `dbfs`, which is
+    what the service's gate looks at. Rescaled rather than attenuated by a fixed factor
+    because `make fixtures` re-renders the audio and its level moves with the renderer."""
     pcm, fmt = read_wav(AUDIO)
-    quiet = (np.frombuffer(pcm, dtype="<i2") * 0.01).astype("<i2").tobytes()
+    samples = np.frombuffer(pcm, dtype="<i2").astype(np.float64) / 32768.0
+    frame = fmt.byte_count(0.020) // 2
+    loudest = max(
+        np.sqrt(np.mean(samples[i : i + frame] ** 2)) for i in range(0, samples.size - frame, frame)
+    )
+    return (samples * (10 ** (dbfs / 20) / loudest) * 32768.0).astype("<i2").tobytes()
+
+
+@pytest.mark.parametrize(("dbfs", "sessions"), [(-58.0, 1), (-65.0, 0)])
+async def test_the_voxtral_gate_opens_at_the_quietest_speech_it_was_measured_to_read(
+    dbfs: float, sessions: int
+) -> None:
+    """Voxtral reads speech far below Whisper's -45 dBFS gate -- down to a loudest frame
+    of about -58 dBFS -- and returns nothing below about -62, so its own gate has to sit
+    between the two or quiet callers are dropped before the model ever sees them."""
+    transcriber = StubStreamingTranscriber()
+    _, fmt = read_wav(AUDIO)
 
     async def quiet_speech() -> AsyncIterator[AudioChunk | FlushSignal]:
-        for chunk in frames(quiet, fmt):
+        for chunk in frames(speech_peaking_at(dbfs), fmt):
             yield chunk
         await asyncio.sleep(0.3)
         yield FlushSignal()
@@ -238,8 +329,8 @@ async def test_speech_too_quiet_for_whisper_still_opens_a_voxtral_session() -> N
         stt = WhisperStt(f"ws://{host}/v1/stream")
         events = await collect(stt.stream(quiet_speech(), "en"))
 
-    assert [e.text for e in events if e.flushed] == [UTTERANCE]
-    assert len(transcriber.sessions[warmed:]) == 1
+    assert [e.text for e in events if e.flushed] == [UTTERANCE if sessions else ""]
+    assert len(transcriber.sessions[warmed:]) == sessions
 
 
 async def test_each_utterance_is_decoded_by_a_session_of_its_own() -> None:
@@ -292,3 +383,4 @@ def test_whisper_drops_low_confidence_segments() -> None:
     assert confident_text([(" what", -2.76), (" you", -2.76)]) == ""
     assert confident_text([(" My name is Anna Weber.", -0.26)]) == "My name is Anna Weber."
     assert confident_text([(" Thank you.", -0.44), (" um", -1.8)]) == "Thank you."
+    assert confident_text([(" Yes.", -0.44), (" Tuesday.", -1.0)]) == "Yes. Tuesday."

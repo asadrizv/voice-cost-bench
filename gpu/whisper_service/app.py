@@ -355,9 +355,7 @@ class StreamingTurn:
         return self._samples >= INTERIM_AFTER_S * SAMPLE_RATE
 
     def interim(self) -> Work:
-        if self._session is None:  # unreachable: `ready` is false until one is opened
-            raise RuntimeError("no utterance has begun")
-        return self._session.advance
+        return self._session.advance  # type: ignore[union-attr]  # `ready` opened it
 
     def final(self) -> Work | None:
         return self._session.finish if self._session is not None else None
@@ -404,7 +402,7 @@ def create_app(
         threads = 1 if isinstance(transcriber, StreamingTranscriber) else workers
         state["pool"] = ThreadPoolExecutor(max_workers=threads)
         state["slots"] = asyncio.Semaphore(threads)
-        # Warm load: the first real call must not pay for CUDA kernel compilation.
+        # Warm load: the first real call must not pay for kernel compilation.
         warm = new_turn("en")
         warm.add(WARMUP_PCM)
         if (work := warm.final()) is not None:
