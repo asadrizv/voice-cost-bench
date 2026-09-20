@@ -107,5 +107,6 @@ pytest_add_cli_args = [
     # mutmut forks per mutant, and a forked process that has already initialised Metal or
     # CUDA crashes; the real-weight probes are also far too slow to run once per mutant.
     "--ignore=tests/integration/test_qwen3_tts_model.py",
+    "--ignore=tests/integration/test_voxtral_stt_model.py",
 ]
 pytest_add_cli_args_test_selection = ["tests/unit", "tests/contract", "tests/integration"]

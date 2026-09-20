@@ -84,11 +84,11 @@ class Transcriber(Protocol):
 
 class FasterWhisperTranscriber:
     engine = "faster-whisper"
+    model = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
 
     def __init__(self) -> None:
         from faster_whisper import WhisperModel
 
-        self.model = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
         self._model = WhisperModel(
             self.model,
             device=os.environ.get("WHISPER_DEVICE", "cuda"),
@@ -112,12 +112,12 @@ class MlxWhisperTranscriber:
     its latency says nothing about the L40S benchmark."""
 
     engine = "mlx"
+    model = os.environ.get("WHISPER_MLX_REPO", "mlx-community/whisper-large-v3-turbo")
 
     def __init__(self) -> None:
         import mlx_whisper
 
         self._transcribe = mlx_whisper.transcribe
-        self.model = os.environ.get("WHISPER_MLX_REPO", "mlx-community/whisper-large-v3-turbo")
 
     def transcribe(self, audio: np.ndarray, language: str) -> str:
         result = self._transcribe(
