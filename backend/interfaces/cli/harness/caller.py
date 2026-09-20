@@ -4,6 +4,7 @@ import asyncio
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
 
 import yaml
@@ -25,6 +26,13 @@ class Conversation:
     language: str
     turns: list[str]
     audio: list[list[AudioChunk]]
+
+    @cached_property
+    def last_audible_frames(self) -> list[int | None]:
+        """Where each utterance stops being audible — a property of the fixture, found once
+        here rather than rescanned per utterance per call, where the scan lands as a burst
+        between pacer ticks and inflates the harness's own lateness figures."""
+        return [_last_audible_frame(utterance) for utterance in self.audio]
 
     @property
     def sha(self) -> str:
@@ -88,9 +96,9 @@ class SyntheticCaller:
     async def frames(self) -> AsyncIterator[AudioChunk]:
         async for chunk in self._await_reply():
             yield chunk
-        for utterance in self._conv.audio:
+        for index, utterance in enumerate(self._conv.audio):
             self._output.caller_speech_started()
-            last_voiced = _last_audible_frame(utterance)
+            last_voiced = self._conv.last_audible_frames[index]
             for position, chunk in enumerate(utterance):
                 await self.pacer.tick()
                 if position == last_voiced:

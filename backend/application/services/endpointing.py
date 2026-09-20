@@ -252,6 +252,7 @@ class SmartTurnEndpointDetector:
         self._window_bytes = audio_format.byte_count(WINDOW_S)
         self._pre_speech_bytes = audio_format.byte_count(PRE_SPEECH_S)
         self._inference_ms: list[float] = []
+        self._failures = 0
         self.reset()
 
     def reset(self) -> None:
@@ -301,6 +302,14 @@ class SmartTurnEndpointDetector:
         """How long the model took over each decision this call, in arrival order."""
         return tuple(self._inference_ms)
 
+    @property
+    def failures(self) -> int:
+        """Decisions the model could not answer. Each one costs only the silence ceiling,
+        so a model that fails every time still answers calls — as a silence endpointer.
+        The benchmark publishes this count so a run labelled smart_turn that never asked
+        the model says so."""
+        return self._failures
+
     def _window(self) -> bytes:
         return bytes(self._window_bytes - len(self._audio)) + bytes(self._audio)
 
@@ -325,6 +334,7 @@ class SmartTurnEndpointDetector:
         try:
             self._verdict, inference_ms = decided.result()
         except Exception:
+            self._failures += 1
             log.warning(
                 "Smart Turn inference failed; holding for the silence ceiling", exc_info=True
             )

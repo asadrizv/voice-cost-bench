@@ -333,6 +333,9 @@ def test_smart_turn_falls_back_to_the_ceiling_when_the_model_fails() -> None:
     last = speak_then_silence(d)
     assert first_commit_after_silence(d, last) == pytest.approx(1.5, abs=0.021)
     assert d.inference_ms == ()
+    # Counted, not just logged: a run that answered every turn at the ceiling is a silence
+    # benchmark, and would otherwise be published under the smart_turn label.
+    assert d.failures == 1
 
 
 def test_smart_turn_refuses_audio_it_was_not_trained_on() -> None:

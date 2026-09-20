@@ -36,6 +36,7 @@ class LevelRun:
     lateness_ms: list[float] = field(default_factory=list)
     caller_observed_ms: list[float] = field(default_factory=list)
     endpoint_inference_ms: list[float] = field(default_factory=list)
+    endpoint_failures: int = 0
     unanswered_turns: int = 0
     wall_s: float = 0.0
 
@@ -105,5 +106,6 @@ class LevelRunner:
                 result.failed += 1
             if isinstance(detector, SmartTurnEndpointDetector):
                 result.endpoint_inference_ms.extend(detector.inference_ms)
+                result.endpoint_failures += detector.failures
             result.reply_timeouts += caller.timeouts
             result.lateness_ms.extend(caller.pacer.lateness_ms)

@@ -101,6 +101,7 @@ def summarise_level(
             for pct in (50, 95, 99)
         },
         "endpoint_decisions": len(run.endpoint_inference_ms),
+        "endpoint_failures": run.endpoint_failures,
         **{
             f"endpoint_inference_p{pct}_ms": round(percentile(run.endpoint_inference_ms, pct), 2)
             if run.endpoint_inference_ms
