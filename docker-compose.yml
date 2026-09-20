@@ -1,4 +1,10 @@
-# Local stack, one command: `make up`. The GPU services run elsewhere (gpu/).
+# Local stack, one command: `make up`. The GPU services run elsewhere (gpu/): GPU_HOST
+# names that machine, and defaults to this one.
+x-gpu-host: &gpu-host
+  VLLM_BASE_URL: http://${GPU_HOST:-host.docker.internal}:8000/v1
+  WHISPER_WS_URL: ws://${GPU_HOST:-host.docker.internal}:8001/v1/stream
+  KOKORO_URL: http://${GPU_HOST:-host.docker.internal}:8002
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -19,9 +25,11 @@ services:
     build: .
     env_file: [{ path: .env, required: false }]
     environment:
+      <<: *gpu-host
       DATABASE_URL: postgresql://vcb:vcb@postgres:5432/vcb
       LIVEKIT_URL: ws://livekit:7880
       LIVEKIT_PUBLIC_URL: ${LIVEKIT_PUBLIC_URL:-ws://localhost:7880}
+    extra_hosts: ["host.docker.internal:host-gateway"]
     ports: ["8080:8080"]
     volumes: [./results:/app/results]
     depends_on: { postgres: { condition: service_healthy } }
@@ -31,9 +39,11 @@ services:
     command: ["python", "-m", "backend.interfaces.agent.livekit_agent", "start"]
     env_file: [{ path: .env, required: false }]
     environment:
+      <<: *gpu-host
       DATABASE_URL: postgresql://vcb:vcb@postgres:5432/vcb
       LIVEKIT_URL: ${LIVEKIT_AGENT_URL:-ws://livekit:7880}
       API_BASE_URL: http://api:8080
+    extra_hosts: ["host.docker.internal:host-gateway"]
     depends_on: [api, livekit]
 
   frontend:

@@ -1,6 +1,14 @@
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
 
 export type Pipeline = "api" | "selfhosted";
+/** Mirrors EndpointerKind in backend/application/services/endpointing.py. */
+export const ENDPOINTERS = {
+  semantic: "Semantic endpointing",
+  silence: "Silence threshold",
+  smart_turn: "Smart Turn v3.2 (audio model)",
+} as const;
+export type Endpointer = keyof typeof ENDPOINTERS;
+export const DEFAULT_ENDPOINTER: Endpointer = "semantic";
 export const STAGES = ["stt", "llm", "tts", "gpu", "telephony"] as const;
 export type Stage = (typeof STAGES)[number];
 export type Cost = Record<Stage | "total", number>;
@@ -105,7 +113,7 @@ async function get<T>(path: string): Promise<T> {
 }
 
 export const api = {
-  token: async (body: { pipeline: Pipeline; persona: string; endpointer: string }) => {
+  token: async (body: { pipeline: Pipeline; persona: string; endpointer: Endpointer }) => {
     const res = await fetch(`${API_URL}/token`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -135,14 +143,32 @@ export interface BenchmarkLevel {
   call_minutes: number;
   cost_per_minute_usd: number;
   cost_per_minute_by_stage_usd: Cost;
+  cost_per_minute_by_carrier_usd?: Record<string, number>;
   effective_concurrency: number;
   latency_ms: Record<LatencyStage, { p50: number; p95: number; mean: number }>;
   end_to_end_p95_ms: number;
   perceived_delay_p95_ms: number;
+  /** Absent from runs before caller-observed delay was measured; null when no turn was answered. */
+  caller_observed_p50_ms?: number | null;
+  caller_observed_p95_ms?: number | null;
+  caller_observed_p99_ms?: number | null;
+  caller_observed_turns?: number;
+  caller_observed_unanswered?: number;
   within_budget: boolean;
   stt_wer: number | null;
   harness_valid: boolean;
   harness_lateness_p95_ms: number;
+}
+
+/** per_minute_usd is null when the carrier publishes no per-minute price; note says why. */
+export interface TelephonyQuote {
+  carrier: string;
+  per_minute_usd: number | null;
+  source_url: string;
+  checked_on: string;
+  verified: boolean;
+  selected: boolean;
+  note: string;
 }
 
 export interface Benchmark {
@@ -157,5 +183,6 @@ export interface Benchmark {
   } | null;
   utilisation_curve: Array<Record<string, number>>;
   client_gpu_quotes: Array<{ provider: string; sku: string; region: string; hourly_usd: number }>;
+  telephony_quotes?: TelephonyQuote[];
   baseline?: { provenance: Record<string, unknown>; level: BenchmarkLevel | null };
 }

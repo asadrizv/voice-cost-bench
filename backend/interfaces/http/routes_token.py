@@ -9,8 +9,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from livekit import api
 from pydantic import BaseModel
 
+from backend.application.services.endpointing import EndpointerKind
 from backend.domain.value_objects.pipeline_kind import PipelineKind
 from backend.infrastructure.config.settings import Settings
+from backend.infrastructure.pipeline_factory import PipelineNotSelectable, require_selectable
 from backend.interfaces.container import Container
 from backend.interfaces.http.deps import container, settings
 
@@ -21,7 +23,7 @@ AGENT_NAME = "voice-cost-bench"
 class TokenRequest(BaseModel):
     pipeline: PipelineKind | None = None
     persona: str | None = None
-    endpointer: str | None = None
+    endpointer: EndpointerKind | None = None
 
 
 class TokenResponse(BaseModel):
@@ -44,16 +46,18 @@ def create_token(
     carried by the token's room configuration: an explicit dispatch to our agent with the
     choice as job metadata, so no other agent on the LiveKit project picks the call up."""
     pipeline = body.pipeline or s.pipeline
+    try:
+        require_selectable(s, pipeline)
+    except PipelineNotSelectable as exc:
+        raise HTTPException(409, str(exc)) from None
     persona = body.persona or s.persona
     if persona not in c.personas.available():
         raise HTTPException(404, f"unknown persona {persona}")
     endpointer = body.endpointer or s.endpointer
-    if endpointer not in ("semantic", "silence"):
-        raise HTTPException(422, "endpointer must be semantic or silence")
 
     call_id = f"call-{secrets.token_hex(6)}"
     metadata = json.dumps(
-        {"pipeline": pipeline.value, "persona": persona, "endpointer": endpointer}
+        {"pipeline": pipeline.value, "persona": persona, "endpointer": endpointer.value}
     )
     token = (
         api.AccessToken(s.livekit_api_key, s.livekit_api_secret)

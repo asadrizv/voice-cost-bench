@@ -4,6 +4,7 @@ import asyncio
 
 from backend.application.ports.clock import Clock
 from backend.domain.value_objects.audio import AudioChunk
+from backend.infrastructure.audio.level import first_audible_s
 
 
 class PacedAudioOutput:
@@ -17,12 +18,38 @@ class PacedAudioOutput:
         self._until = clock.monotonic()
         self.first_audio_at: float | None = None
         self.seconds_played = 0.0
+        self.caller_observed_ms: list[float] = []
+        self._caller_stopped_at: float | None = None
+        self._unanswered = 0
+
+    def caller_speech_started(self) -> None:
+        if self._caller_stopped_at is not None:
+            self._unanswered += 1
+            self._caller_stopped_at = None
+
+    def caller_speech_ended(self) -> None:
+        """Caller-observed delay runs from here to the first audible agent audio played
+        after it, as Openbenchmarks' TTFAB does from a recording of both sides."""
+        self._caller_stopped_at = self._clock.monotonic()
+
+    @property
+    def awaiting_answer(self) -> bool:
+        """The caller has finished speaking and no audible agent audio has played since."""
+        return self._caller_stopped_at is not None
+
+    @property
+    def unanswered_turns(self) -> int:
+        return self._unanswered + int(self.awaiting_answer)
 
     async def write(self, chunk: AudioChunk) -> None:
         now = self._clock.monotonic()
         if self.first_audio_at is None:
             self.first_audio_at = now
-        self._until = max(self._until, now) + chunk.duration_seconds
+        plays_at = max(self._until, now)
+        if self._caller_stopped_at is not None and (offset := first_audible_s(chunk)) is not None:
+            self.caller_observed_ms.append((plays_at + offset - self._caller_stopped_at) * 1000)
+            self._caller_stopped_at = None
+        self._until = plays_at + chunk.duration_seconds
         self.seconds_played += chunk.duration_seconds
         ahead = self._until - now - self._max_queue
         if ahead > 0:

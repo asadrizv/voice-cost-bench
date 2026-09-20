@@ -3,6 +3,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3-pip esp
 WORKDIR /srv
 COPY kokoro_service/requirements.txt .
 RUN pip3 install --no-cache-dir -r requirements.txt
+# Kokoro's weights are baked in; the qwen3-tts-vllm backend's live in the vLLM-Omni server.
 RUN python3 -c "from kokoro import KPipeline; KPipeline(lang_code='a')"
 COPY __init__.py gpu/__init__.py
 COPY kokoro_service gpu/kokoro_service

@@ -105,3 +105,14 @@ async def test_provider_error_is_recorded_then_raised() -> None:
         await world.handle_turn.execute(ctx, TurnRequest(user_text="Hi.", output=RecordingOutput()))
     stored = await world.repo.get(ctx.call.id)
     assert len(stored.turns) == 1 and stored.turns[0].interrupted
+
+
+async def test_a_turn_cut_off_before_the_agent_spoke_has_no_response_delay(world: World) -> None:
+    """No agent audio means there was no response to time; a 0 ms sample would drag every
+    latency percentile down."""
+    ctx = await world.start_call.execute(PipelineKind.API, "law_firm")
+    request = TurnRequest(user_text="My landlord", output=RecordingOutput())
+    request.interrupt.set()
+    outcome = await world.handle_turn.execute(ctx, request)
+    assert outcome.turn.interrupted and not outcome.audio_started
+    assert outcome.turn.latency is None

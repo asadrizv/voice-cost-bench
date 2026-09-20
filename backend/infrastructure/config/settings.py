@@ -6,9 +6,14 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from backend.application.services.endpointing import EndpointerKind
 from backend.domain.value_objects.pipeline_kind import PipelineKind
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+class MissingServingConfig(RuntimeError):
+    pass
 
 
 class Settings(BaseSettings):
@@ -18,7 +23,11 @@ class Settings(BaseSettings):
 
     pipeline: PipelineKind = PipelineKind.API
     persona: str = "law_firm"
-    endpointer: str = Field("semantic", description="semantic | silence")
+    endpointer: EndpointerKind = EndpointerKind.SEMANTIC
+    eu_only: bool = False
+    """EU-only deployment profile: startup fails unless every catalogue component a call
+    could touch is EU-resident, and no call may run on a pipeline other than the one
+    above."""
 
     livekit_url: str = "ws://localhost:7880"
     livekit_public_url: str = ""
@@ -56,15 +65,40 @@ class Settings(BaseSettings):
     selfhosted_max_concurrency: int = 40
 
     config_dir: Path = REPO_ROOT / "config"
-    serving_config: str = "serving/qwen-9b-l40s.yaml"
+    serving_config: str = "qwen-9b-l40s.yaml"
+    """A file name in config/serving/: the meaning gpu/docker-compose.gpu.yml and
+    gpu/runpod/start.sh give SERVING_CONFIG when they start vLLM from it."""
+
+    @property
+    def selectable_pipelines(self) -> tuple[PipelineKind, ...]:
+        """The pipelines a call may run on, which the browser and the harness choose from
+        per call. Under EU_ONLY only the configured one, so a per-call choice cannot reach
+        components the profile refused to start with."""
+        return (self.pipeline,) if self.eu_only else tuple(PipelineKind)
 
     @property
     def rates_path(self) -> Path:
         return self.config_dir / "rates.yaml"
 
     @property
+    def components_path(self) -> Path:
+        return self.config_dir / "components.yaml"
+
+    @property
     def personas_dir(self) -> Path:
         return self.config_dir / "personas"
+
+    @property
+    def serving_config_path(self) -> Path:
+        """Raises MissingServingConfig when SERVING_CONFIG names no file, so a benchmark
+        can't record provenance for a vLLM configuration nobody can find."""
+        path = self.config_dir / "serving" / self.serving_config
+        if not path.is_file():
+            raise MissingServingConfig(
+                f"SERVING_CONFIG={self.serving_config}: no file at {path}; "
+                "name a file in config/serving/"
+            )
+        return path
 
 
 @lru_cache

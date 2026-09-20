@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Any
 
 from backend.application.ports.metrics_sink import MetricsSink
+from backend.application.services.endpointing import EndpointerKind
+from backend.application.use_cases.describe_components import DescribeComponents
 from backend.domain.value_objects.pipeline_kind import PipelineKind
 from backend.infrastructure.config.settings import REPO_ROOT, Settings, get_settings
 from backend.infrastructure.persistence.postgres_call_repository import SqlCallRepository
@@ -30,7 +32,8 @@ from backend.infrastructure.telemetry.http_metrics_sink import HttpMetricsSink
 from backend.interfaces.cli.harness import provenance, report
 from backend.interfaces.cli.harness.caller import load_conversation
 from backend.interfaces.cli.harness.runner import LevelRunner
-from backend.interfaces.container import Container, build_container
+from backend.interfaces.container import Container, build_container, warn_over_budget
+from backend.interfaces.http.serializers import telephony_quote
 
 log = logging.getLogger("loadtest")
 RESULTS = REPO_ROOT / "results"
@@ -64,15 +67,32 @@ async def _sweep(args: argparse.Namespace) -> dict[str, Any]:
         levels = levels + [lv for lv in BEYOND_LEVELS if lv > max(levels)]
     ceiling = max(levels)
     container = _container(settings, args.forward, ceiling)
+    # A simulated run never touches the STT/TTS services, so asking them would record
+    # engines that took no part in the numbers.
+    describer = (
+        DescribeComponents(container.catalogue, None)
+        if simulated
+        else container.describe_components
+    )
     gpu = SimulatedGpu() if simulated else None
     runner = LevelRunner(container, kind, conversation, args.endpointer, simulated=gpu)
 
+    # Asked before the first level, not after the last: the point of the budget is to be
+    # read while the pod is still cheap to stop.
+    components = await describer.execute(kind)
+    budget = container.gpu_budget.execute(
+        [d.component for d in components],
+        reserved={d.component.id: d.gpu_fraction for d in components if d.gpu_fraction},
+    )
+    warn_over_budget(budget, settings.eu_only)
+
+    carriers = container.rates.telephony_quotes()
     results: list[dict[str, Any]] = []
     try:
         for level in levels:
             log.info("level %d: %ds of %d concurrent calls", level, args.duration, level)
             run = await runner.run(level, args.duration)
-            summary = report.summarise_level(run, conversation, simulated)
+            summary = report.summarise_level(run, conversation, simulated, carriers)
             results.append(summary)
             log.info(
                 "  %d calls, $%.4f/min, e2e p95 %.0f ms, perceived p95 %.0f ms%s",
@@ -106,6 +126,9 @@ async def _sweep(args: argparse.Namespace) -> dict[str, Any]:
             args.endpointer,
             simulated,
             container.rates.raw(),
+            components,
+            budget,
+            container.catalogue.version(),
         ),
         "budgets_ms": report.budgets(),
         "levels": results,
@@ -116,6 +139,7 @@ async def _sweep(args: argparse.Namespace) -> dict[str, Any]:
         if kind is PipelineKind.SELFHOSTED
         else [],
         "client_gpu_quotes": quotes,
+        "telephony_quotes": [telephony_quote(q) for q in carriers],
     }
 
 
@@ -135,7 +159,7 @@ async def _wer(args: argparse.Namespace) -> dict[str, Any]:
     return await run_wer(get_settings(), FIXTURES, args.pipeline, args.language, args.limit)
 
 
-def main(argv: list[str] | None = None) -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="loadtest", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -145,7 +169,12 @@ def main(argv: list[str] | None = None) -> None:
         p.add_argument("--pipeline", choices=["api", "selfhosted", "simulated"], required=True)
         p.add_argument("--conversation", default="intake_en")
         p.add_argument("--duration", type=int, default=120, help="seconds per level")
-        p.add_argument("--endpointer", choices=["semantic", "silence"], default="semantic")
+        p.add_argument(
+            "--endpointer",
+            type=EndpointerKind,
+            choices=list(EndpointerKind),
+            default=EndpointerKind.SEMANTIC,
+        )
         p.add_argument(
             "--forward",
             action="store_true",
@@ -169,7 +198,11 @@ def main(argv: list[str] | None = None) -> None:
     wer.add_argument("--limit", type=int)
     wer.add_argument("--out", type=Path)
 
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", stream=sys.stderr)
 
     if args.command == "wer":

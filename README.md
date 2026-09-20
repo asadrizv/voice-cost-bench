@@ -6,7 +6,7 @@ minute** and **latency** for both:
 | | STT | LLM | TTS |
 |---|---|---|---|
 | `api` | Deepgram Nova-3 | GPT-4o-mini | ElevenLabs Flash v2.5 |
-| `selfhosted` | faster-whisper large-v3-turbo | Qwen3.5-9B on vLLM | Kokoro |
+| `selfhosted` | faster-whisper large-v3-turbo | Qwen3.5-9B on vLLM | Kokoro, or Qwen3-TTS for German |
 
 The self-hosted pipeline runs all three models on one L40S. The load harness finds the
 concurrency where its p95 latency breaks, and reports cost at stated utilisation.
@@ -24,7 +24,7 @@ simulated GPU model and the whole stack works end to end. You hear a tone instea
 voice, and every cost is fiction.
 
 **Fully local, real voices, no keys (Apple Silicon):** the self-hosted pipeline runs on the
-Mac itself: Qwen 3.5 9B via Ollama, Whisper via MLX, Kokoro on CPU.
+Mac itself: Qwen 3.5 9B via Ollama, Whisper via MLX, Kokoro on CPU and Qwen3-TTS via MLX.
 
 ```bash
 brew install ollama livekit && ollama pull qwen3.5:9b
@@ -33,7 +33,10 @@ uv sync --extra local
 
 Then run `ollama serve`, `livekit-server --dev`, the Whisper and Kokoro services
 (`WHISPER_BACKEND=mlx uv run --extra local uvicorn gpu.whisper_service.app:app --factory
---port 8001`, same for `gpu.kokoro_service` on 8002), and the API and agent with
+--port 8001`, and `TTS_ENGINES=kokoro,qwen3-tts uv run --extra local uvicorn
+gpu.kokoro_service.app:app --factory --port 8002`, which downloads ~3 GB of Qwen3-TTS
+weights the first time; `WHISPER_BACKEND=voxtral` swaps Whisper for streaming Voxtral, see
+`gpu/README.md`), and the API and agent with
 `LLM_SERVER=ollama VLLM_BASE_URL=http://localhost:11434/v1 VLLM_MODEL=qwen3.5:9b
 SELFHOSTED_ON_LOCAL_MACHINE=true`. Latency on a laptop is not a benchmark figure; the call
 screen says so.
@@ -87,6 +90,9 @@ make wer-audio wer # STT word error rate, English and German, both pipelines
 block: git SHA and dirty flag, model and pinned revision, vLLM version, serving-config hash,
 GPU SKU/region/price, rate-card date and hash, fixture audio hash, persona hash, endpointer.
 A level whose harness fell behind real time is flagged invalid rather than reported.
+Each level also reports caller-observed delay (p50/p95/p99), timed from the fixture audio
+and the agent's audio rather than our own endpointer, so it compares with Openbenchmarks'
+TTFAB; the benchmark page says how it is measured.
 
 `make benchmark-sim` runs the same sweep offline against a queueing model of the GPU. It
 exercises the harness; its output is stamped `simulated` and the UI says so.
@@ -104,11 +110,64 @@ Clean architecture: `domain` (pure) ← `application` (ports, use cases) ← `in
   above the ceiling and is the only source of the GPU cost divisor. Each call accrues
   1/n of every second, so shares always sum to the busy time. The agent runs jobs as
   threads so all calls share one supervisor.
-- **Endpointing** is a port with two implementations: fixed silence (baseline) and
+- **Endpointing** is a port with three implementations: fixed silence (baseline);
   semantic, which waits 250 ms after a finished sentence and up to 1.5 s after a dangling
-  "and my…".
+  "and my…"; and Smart Turn v3.2, an 8 MB audio model (BSD-2) that scores the caller's
+  last 8 seconds after a 200 ms pause and holds to the same 1.5 s ceiling when it says the
+  turn is unfinished. Its weights download on first use and its per-decision inference
+  time is reported by the harness.
 - **Prices** live only in `config/rates.yaml`. Sampling parameters and the no-thinking
   switch live in the persona. vLLM flags live in `config/serving/<model>-<gpu>.yaml`.
+
+## No call audio is stored
+
+Caller and agent audio exist only in memory for the length of a call. The database keeps
+transcripts, timings and costs, and live events carry the same. No audio goes to disk,
+the database or the event stream. In Germany, recording someone's spoken words without
+consent is a criminal offence (§201 StGB). Transcribing live without keeping the audio is
+the position a law firm can defend.
+
+Two tests keep this true: a full call through `CallSession` must leave no audio in the
+repository or in emitted events, and the schema test fails if any table gains a binary
+column. On the `api` pipeline, audio is streamed to Deepgram and ElevenLabs, so their
+retention terms also apply.
+
+## EU-only deployment
+
+`EU_ONLY=true` refuses to start unless every catalogued component a call could touch is
+EU-resident (`leaves_eu: false` in `config/components.yaml`). The error names each
+offender — vendor and region — so a misconfiguration is fixed before a call, not after.
+A law firm must know and bind every subcontractor that sees client data (§43e BRAO).
+
+A call picks its pipeline in the browser, so the profile also closes that choice: it
+serves `PIPELINE` and nothing else, and `/token` and the agent both refuse any other,
+naming the profile. Otherwise a toggle would route a caller straight past the check.
+`GET /transparency` then reports `"eu_only": true` and lists only the pipeline a call can
+select, so the claim is checked against the running configuration rather than taken on
+trust.
+
+With the shipped catalogue an EU-only deployment is `PIPELINE=selfhosted` plus:
+
+- **An EU carrier.** Twilio and Telnyx are catalogued `us`. sipgate is the German one, and
+  it sells inbound by the month rather than by the minute, so it has no `price_usd` in
+  `config/rates.yaml` — enter your contracted per-minute rate before selecting it.
+- **Your own LiveKit.** `LIVEKIT_URL` pointing at `*.livekit.cloud` selects the managed
+  SFU, which routes media through its nearest edge.
+- **EU hosts.** `hosts:` in `config/components.yaml` states where the GPU host and the app
+  host run; the shipped entries assume the EU (the priced RunPod L40S is in the
+  Netherlands). Correct them for your deployment.
+
+The profile cannot yet speak German on one L40S. Kokoro has no German voice, so German
+needs Qwen3-TTS, and ElevenLabs is not available under the profile: Qwen3-TTS (5.48 GiB)
+beside Voxtral (9.98 GiB) and the LLM's configured 0.72 share of the card (34.56 GiB)
+comes to 50.02 GiB, 2.02 GiB more than an L40S holds. That stack runs on Apple Silicon
+today; both engines now have CUDA backends, but each is served by a vLLM process that
+reserves a share of the card rather than its weights, so on one L40S they need a much
+smaller LLM share still (`gpu/README.md`, "GPU memory on one card") -- a change to make
+against #10's measurements rather than to assume. Startup reports an
+over-committed card as an error under the profile, and only a warning without it, because
+the profile has no API pipeline to fall back on — it still starts, since every memory
+figure is an estimate until #10 measures one.
 
 ## Tests
 
@@ -120,18 +179,23 @@ make test-paid  # one real request per paid provider (cents)
 ```
 
 Contract suites run the same tests against both implementations of each port: Deepgram
-against a server speaking its protocol from fixtures, Whisper and Kokoro against the real
-service code with the model stubbed, and OpenAI and vLLM over recorded SSE. Test runs cost
-nothing.
+against a server speaking its protocol from fixtures, Whisper and both TTS engines against
+the real service code with the models stubbed, and OpenAI and vLLM over recorded SSE. Test
+runs cost nothing. Tests that need real weights skip unless those weights are already
+cached, so a clean checkout downloads nothing.
 
 ## Caveats to state in any client conversation
 
 - **Rates were last verified 2026-09-17** (`config/rates.yaml`). Re-check before quoting;
   L40S prices move fast.
-- **Telephony ($0.014/min) is in both pipelines** and becomes the largest line item once
-  the GPU is shared. It's identical on both sides, so it narrows the percentage saving.
-- **Kokoro has no German voice.** German self-hosted TTS needs a multilingual model
-  (Chatterbox Multilingual, Orpheus) before any German comparison is fair.
+- **Telephony is in both pipelines** and becomes the largest line item once the GPU is
+  shared. It's identical on both sides, so it narrows the percentage saving. The selected
+  carrier in `config/rates.yaml` (Twilio, $0.014/min) prices it; the benchmark also shows
+  cost per minute under each other listed carrier. Telnyx and sipgate are unverified.
+- **German self-hosted TTS has only been run on Apple Silicon.** Kokoro has no German
+  voice, so the German persona uses Qwen3-TTS, which streams through mlx-audio. Its CUDA
+  backend (vLLM-Omni) is contract-tested but has never been run on a GPU, so a German
+  comparison on the L40S is not yet fair.
 - **The WER corpus is synthetic speech** (`fixtures/wer/README.md`). It's fine for
   regression and head-to-head comparison, not for a published German WER.
 - **Quote loaded cost at a stated utilisation and concurrency**, never a bare per-minute

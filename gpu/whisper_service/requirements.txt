@@ -1,5 +1,9 @@
+# The Apple Silicon engines' runtimes are deliberately absent (mlx-whisper and mlx-audio
+# come from the project's `local` extra), and voxtral-vllm needs none: it reaches a vLLM
+# realtime server over a WebSocket. This image runs faster-whisper and voxtral-vllm.
 fastapi>=0.115
 uvicorn[standard]>=0.32
 faster-whisper>=1.1
 numpy>=2.0
 prometheus-client>=0.21
+websockets>=14

@@ -5,10 +5,12 @@ from dataclasses import dataclass
 import pytest
 
 from backend.application.ports.pipeline_provider import Pipeline
+from backend.application.ports.running_engines import RunningEngines
 from backend.application.services.concurrency_supervisor import ConcurrencySupervisor
 from backend.application.use_cases.end_call import EndCall
 from backend.application.use_cases.handle_call_turn import HandleCallTurn
 from backend.application.use_cases.start_call import StartCall
+from backend.domain.entities.persona import Persona
 from backend.domain.services.cost_calculator import CostCalculator
 from backend.domain.value_objects.pipeline_kind import PipelineKind
 from backend.infrastructure.persistence.inmemory_call_repository import InMemoryCallRepository
@@ -47,6 +49,8 @@ def make_world(
     ceiling: int = 4,
     llm: FakeLlm | None = None,
     tts: FakeTts | None = None,
+    persona: Persona = PERSONA,
+    engines: RunningEngines | None = None,
 ) -> World:
     clock = FakeClock()
     repo = InMemoryCallRepository()
@@ -68,10 +72,11 @@ def make_world(
     start = StartCall(
         repo,
         pipelines,
-        StaticPersonas(PERSONA),
+        StaticPersonas(persona),
         {PipelineKind.SELFHOSTED: supervisor},
         metrics,
         clock,
+        engines=engines,
         dev_spend_limit_usd=spend_limit,
         id_factory=lambda: next(ids),
     )

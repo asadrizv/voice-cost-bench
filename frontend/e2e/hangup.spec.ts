@@ -16,7 +16,8 @@ test("the agent hangs up after the caller says goodbye", async ({ page }) => {
   await page.goto("/");
   await page.getByTestId("pipeline-selfhosted").click();
   await page.getByTestId("start-call").click();
-  await expect(page.getByTestId("transcript").locator(".bubble.caller").first()).toContainText("wrong number", {
+  // Which bubble holds the phrase depends on where the caller paused; any will do.
+  await expect(page.getByTestId("transcript").locator(".bubble.caller").filter({ hasText: "wrong number" }).first()).toBeVisible({
     timeout: 40_000,
   });
   await expect(page.getByTestId("call-notice")).toHaveText("Clara ended the call.", { timeout: 20_000 });

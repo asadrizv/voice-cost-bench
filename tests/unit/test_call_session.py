@@ -1,17 +1,27 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
+import re
 from collections.abc import AsyncIterator
+from datetime import datetime
+from decimal import Decimal
+from enum import Enum
 
 import pytest
 
 from backend.application.dto.call_context import CallContext
+from backend.application.ports.endpoint_detector import EndpointDetector
 from backend.application.ports.pipeline_provider import Pipeline
-from backend.application.services.endpointing import SilenceEndpointDetector
+from backend.application.services.endpointing import (
+    SilenceEndpointDetector,
+    SmartTurnEndpointDetector,
+)
 from backend.application.use_cases.call_session import CallSession, SessionConfig
 from backend.domain.entities.call import CallStatus
 from backend.domain.value_objects.audio import AudioChunk
 from backend.domain.value_objects.pipeline_kind import PipelineKind
+from backend.infrastructure.telemetry.event_codec import encode
 from tests.fakes import ByteVad, FakeLlm, FakeTts, RecordingOutput, silence, speech
 from tests.unit.conftest import World, make_world
 
@@ -48,7 +58,10 @@ class Caller:
 
 
 async def make_session(
-    world: World, kind: PipelineKind = PipelineKind.API, config: SessionConfig | None = None
+    world: World,
+    kind: PipelineKind = PipelineKind.API,
+    config: SessionConfig | None = None,
+    endpointer: EndpointDetector | None = None,
 ) -> tuple[CallSession, RecordingOutput, CallContext]:
     ctx = await world.start_call.execute(kind, "law_firm")
     out = RecordingOutput()
@@ -57,7 +70,7 @@ async def make_session(
         world.handle_turn,
         world.end_call,
         ByteVad(),
-        SilenceEndpointDetector(silence_ms=700),
+        endpointer or SilenceEndpointDetector(silence_ms=700),
         out,
         world.clock,
         world.metrics,
@@ -100,6 +113,77 @@ async def test_full_conversation_runs_and_is_accounted() -> None:
     kinds = {e.kind for e in world.metrics.events}  # type: ignore[attr-defined]
     assert {"started", "turn", "ended"} <= kinds
     assert out.chunks
+
+
+_SCALARS = (str, int, float, bool, Decimal, datetime, Enum, type(None))
+# Raw PCM smuggled through latin-1 shows up as control characters; base64 or hex of PCM
+# as a long unbroken run. Transcripts always contain spaces, ids and amounts are short.
+_ENCODED_AUDIO = re.compile(r"[\x00-\x08\x0e-\x1f]|[A-Za-z0-9+/=]{64,}")
+
+
+def audio_like_values(value: object, path: str = "") -> list[str]:
+    """Paths of every value that is, or could be, audio. Fails closed: a type it doesn't
+    recognise is reported, so a numpy array or a new wrapper can't slip past."""
+    if isinstance(value, str):
+        return [path] if _ENCODED_AUDIO.search(value) else []
+    if isinstance(value, _SCALARS):
+        return []
+    if dataclasses.is_dataclass(value) and not isinstance(value, type | AudioChunk):
+        return [
+            p
+            for f in dataclasses.fields(value)
+            for p in audio_like_values(getattr(value, f.name), f"{path}.{f.name}")
+        ]
+    if isinstance(value, dict):
+        return [
+            p
+            for k, v in value.items()
+            for p in audio_like_values(k, f"{path}[key]") + audio_like_values(v, f"{path}[{k}]")
+        ]
+    if isinstance(value, list | tuple | set | frozenset):
+        return [p for i, v in enumerate(value) for p in audio_like_values(v, f"{path}[{i}]")]
+    return [f"{path} ({type(value).__name__})"]
+
+
+@pytest.mark.parametrize("kind", list(PipelineKind))
+async def test_a_full_call_leaves_no_audio_in_storage_or_live_events(kind: PipelineKind) -> None:
+    world = make_world(
+        replies=["May I have your name?", "Thank you, Ms. Weber."],
+        utterances=["I need a lawyer for my lease.", "Anna Weber."],
+    )
+    session, out, _ = await make_session(world, kind)
+    caller = Caller(world, [1000, 800])
+    caller.session = session
+    await session.run(caller.frames())
+    assert out.chunks and world.stt.audio_seconds > 0  # audio did flow through the call
+
+    stored = await world.repo.list()
+    events = world.metrics.events
+    wire = [encode(e) for e in events]  # type: ignore[arg-type]
+
+    assert len(stored) == 1 and len(stored[0].turns) == 3
+    assert {"started", "turn", "ended"} <= {e["kind"] for e in wire}
+    assert audio_like_values(stored, "stored") == []
+    assert audio_like_values(events, "events") == []
+    assert audio_like_values(wire, "wire") == []
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        b"\x01\x00",
+        bytearray(b"\x01\x00"),
+        memoryview(b"\x01\x00"),
+        AudioChunk(b"\x01\x00"),
+        "\x01\x00\x01\x00",
+        "AQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEA",
+        {"extra": [AudioChunk(b"")]},
+        object(),
+    ],
+    ids=lambda v: type(v).__name__,
+)
+def test_audio_detector_flags_every_shape_audio_can_take(value: object) -> None:
+    assert audio_like_values(value) != []
 
 
 async def test_empty_transcript_commits_no_turn() -> None:
@@ -264,6 +348,40 @@ async def test_endpointer_hears_what_the_agent_said() -> None:
     assert [h.strip() for h in heard] == [ctx.persona.greeting, "May I have your email?"]
 
 
+class FrameRecordingEndpointer(SilenceEndpointDetector):
+    def __init__(self) -> None:
+        super().__init__(silence_ms=700)
+        self.observed: list[tuple[AudioChunk, bool]] = []
+
+    def observe_audio(self, frame: AudioChunk, is_speech: bool, now: float) -> None:
+        self.observed.append((frame, is_speech))
+        super().observe_audio(frame, is_speech, now)
+
+
+async def test_endpointer_receives_each_caller_frame_with_its_speech_flag() -> None:
+    world = make_world(utterances=["Hello."])
+    endpointer = FrameRecordingEndpointer()
+    session, _, _ = await make_session(world, endpointer=endpointer)
+    sent: list[AudioChunk] = []
+
+    async def frames() -> AsyncIterator[AudioChunk]:
+        while session.agent_busy:
+            sent.append(silence())
+            yield sent[-1]
+            world.clock.advance(FRAME_S)
+            await asyncio.sleep(0)
+        for chunk in [speech(), speech(), silence()]:
+            sent.append(chunk)
+            yield chunk
+            world.clock.advance(FRAME_S)
+            await asyncio.sleep(0)
+
+    await session.run(frames())
+    assert [frame for frame, _ in endpointer.observed] == sent
+    assert all(o is s for (o, _), s in zip(endpointer.observed, sent, strict=True))
+    assert [flag for _, flag in endpointer.observed[-3:]] == [True, True, False]
+
+
 async def test_llm_prompt_is_prewarmed_with_the_first_turns_prefix() -> None:
     world = make_world(utterances=["Hello."])
     session, _, ctx = await make_session(world)
@@ -332,3 +450,29 @@ async def test_agent_hangs_up_after_goodbyes_unless_the_caller_talks_over_it() -
     world = world2
     call = await session.run(frames(interrupt=False))
     assert session.agent_hung_up and len(call.turns) == 2
+
+
+async def test_smart_turn_commits_turns_as_soon_as_its_model_says_they_are_finished() -> None:
+    heard: list[bytes] = []
+
+    def model(audio: bytes) -> float:
+        heard.append(audio)
+        return 0.9
+
+    world = make_world(
+        replies=["May I have your name?", "Thank you, Ms. Weber."],
+        utterances=["I need a lawyer for my lease.", "Anna Weber."],
+    )
+    session, _, _ = await make_session(
+        world, endpointer=SmartTurnEndpointDetector(model, onset_ms=200, ceiling_ms=1500)
+    )
+    caller = Caller(world, [1000, 800])
+    caller.session = session
+    call = await session.run(caller.frames())
+
+    assert [t.user_text for t in call.turns] == ["", "I need a lawyer for my lease.", "Anna Weber."]
+    for turn in call.turns[1:]:
+        assert turn.latency is not None
+        assert turn.latency.endpoint_detected == pytest.approx(200, abs=25)
+    assert len(heard) == 2
+    assert all(len(audio) == 8 * 16_000 * 2 for audio in heard)

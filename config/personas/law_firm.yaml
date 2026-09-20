@@ -1,6 +1,6 @@
 id: law_firm
 language: en
-greeting: "Good morning, Hartley and Weber, this is Clara. How can I help you today?"
+greeting: "Good morning, Hartley and Weber, this is Clara, an AI assistant. How can I help?"
 sampling:
   temperature: 0.4
   top_p: 0.9

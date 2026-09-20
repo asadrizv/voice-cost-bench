@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { LineChart } from "@/components/charts";
-import { api, type Benchmark } from "@/lib/api";
+import { api, type Benchmark, type TelephonyQuote } from "@/lib/api";
 import { ms, usd } from "@/lib/format";
 
 export default function BenchmarkPage() {
@@ -33,6 +33,12 @@ export default function BenchmarkPage() {
     [levels],
   );
   const prov = data?.provenance;
+  const carriers = data?.telephony_quotes ?? [];
+  const priced = carriers.filter((q) => q.per_minute_usd != null);
+  const unpriced = carriers.filter((q) => q.per_minute_usd == null);
+  const callerObserved = levels.flatMap((l) =>
+    l.caller_observed_p95_ms == null ? [] : [{ x: l.concurrency, y: l.caller_observed_p95_ms }],
+  );
 
   return (
     <main>
@@ -115,6 +121,9 @@ export default function BenchmarkPage() {
                     points: levels.map((l) => ({ x: l.concurrency, y: l.end_to_end_p95_ms })) },
                   { key: "perceived", label: "Perceived", color: "var(--series-2)",
                     points: levels.map((l) => ({ x: l.concurrency, y: l.perceived_delay_p95_ms })) },
+                  ...(callerObserved.length > 0
+                    ? [{ key: "caller", label: "Caller-observed", color: "var(--series-3)", points: callerObserved }]
+                    : []),
                 ]}
                 references={[
                   { label: "900 ms budget", y: data.budgets_ms.end_to_end_p95_ms },
@@ -133,6 +142,7 @@ export default function BenchmarkPage() {
                     <th className="num">Concurrent</th><th className="num">Calls</th><th className="num">Turns</th>
                     <th className="num">Cost / min</th><th className="num">GPU / min</th><th className="num">Telephony / min</th>
                     <th className="num">E2E p50</th><th className="num">E2E p95</th><th className="num">Perceived p95</th>
+                    <th className="num">Caller p50</th><th className="num">Caller p95</th><th className="num">Caller p99</th>
                     <th className="num">STT WER</th><th>Budget</th><th>Harness</th>
                   </tr>
                 </thead>
@@ -148,6 +158,12 @@ export default function BenchmarkPage() {
                       <td className="num">{ms(l.latency_ms.end_to_end.p50)}</td>
                       <td className="num">{ms(l.end_to_end_p95_ms)}</td>
                       <td className="num">{ms(l.perceived_delay_p95_ms)}</td>
+                      <td className="num">{ms(l.caller_observed_p50_ms)}</td>
+                      <td className="num">{ms(l.caller_observed_p95_ms)}</td>
+                      <td className="num">
+                        {ms(l.caller_observed_p99_ms)}
+                        {l.caller_observed_unanswered ? <span className="muted small"> ({l.caller_observed_unanswered} unanswered)</span> : null}
+                      </td>
                       <td className="num">{l.stt_wer == null ? "–" : `${(l.stt_wer * 100).toFixed(1)}%`}</td>
                       <td><span className="badge"><span className="status-dot" style={{ background: l.within_budget ? "var(--good)" : "var(--critical)" }} />{l.within_budget ? "within" : "over"}</span></td>
                       <td>{l.harness_valid ? <span className="muted small">ok</span> : <span className="badge"><span className="status-dot" style={{ background: "var(--warning)" }} />fell behind</span>}</td>
@@ -156,7 +172,57 @@ export default function BenchmarkPage() {
                 </tbody>
               </table>
             </div>
+            <p className="muted small" data-testid="caller-observed-note">
+              <strong>Caller p50/p95/p99</strong> is caller-observed delay, timed outside the call from its audio: the last
+              frame of each fixture utterance above −45 dBFS to the first agent audio above it, so a near-silent lead-in
+              doesn&apos;t count. That matches Openbenchmarks&apos; TTFAB (caller stops speaking to first agent audio, measured
+              from recordings), so the two are comparable. <strong>Perceived</strong> is timed inside the call from our own
+              endpointer. A turn the agent never answers is counted as unanswered, not timed.
+            </p>
           </section>
+
+          {priced.length > 0 && (
+            <section className="card section">
+              <div className="card-head">
+                <h2>Cost per minute by carrier</h2>
+                <span className="muted small">Only the telephony line changes between carriers</span>
+              </div>
+              <div className="table-wrap">
+                <table data-testid="carrier-table">
+                  <thead>
+                    <tr>
+                      <th className="num">Concurrent</th>
+                      {priced.map((q) => (
+                        <th key={q.carrier} className="num">
+                          {q.carrier} ${q.per_minute_usd}/min{q.selected ? " (selected)" : ""}
+                          {!q.verified && <> <UnverifiedBadge /></>}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {levels.map((l) => (
+                      <tr key={l.concurrency}>
+                        <td className="num">{l.concurrency}</td>
+                        {priced.map((q) => {
+                          const cost = l.cost_per_minute_by_carrier_usd?.[q.carrier];
+                          return <td key={q.carrier} className="num">{cost == null ? "–" : usd(cost, 4)}</td>;
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <ul className="muted small">
+                {carriers.map((q) => <CarrierSource key={q.carrier} quote={q} />)}
+              </ul>
+              {unpriced.length > 0 && (
+                <p className="muted small">
+                  No cost column for {unpriced.map((q) => q.carrier).join(", ")}: no per-minute price is published.
+                </p>
+              )}
+            </section>
+          )}
 
           {data.utilisation_curve.length > 0 && (
             <section className="card section">
@@ -201,6 +267,24 @@ export default function BenchmarkPage() {
         </>
       )}
     </main>
+  );
+}
+
+function UnverifiedBadge() {
+  return (
+    <span className="badge" title="Fetched from the carrier's site but not checked by a person: do not quote">
+      <span className="status-dot" style={{ background: "var(--warning)" }} />unverified
+    </span>
+  );
+}
+
+function CarrierSource({ quote }: { quote: TelephonyQuote }) {
+  return (
+    <li>
+      <a href={quote.source_url}>{quote.carrier}</a>{" "}
+      {quote.verified ? `verified ${quote.checked_on}` : `unverified, fetched ${quote.checked_on}`}
+      {quote.note && `: ${quote.note}`}
+    </li>
   );
 }
 

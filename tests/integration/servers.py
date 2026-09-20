@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import uvicorn
+from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse, StreamingResponse
 from websockets.asyncio.server import ServerConnection, serve
 
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
@@ -75,3 +78,155 @@ class FakeDeepgram:
         async with serve(self.handler, "127.0.0.1", 0) as server:
             port = next(iter(server.sockets)).getsockname()[1]
             yield f"ws://127.0.0.1:{port}/v1/listen"
+
+
+@dataclass
+class FakeVllmRealtime:
+    """Speaks vLLM's realtime transcription protocol, as its docs and server describe it:
+    session.created on accept, session.update names the model, a commit starts a generation
+    which streams transcription.delta as audio arrives, and a commit with final=true ends
+    that generation with transcription.done.
+    https://github.com/vllm-project/vllm/blob/main/docs/serving/online_serving/speech_to_text.md
+    https://github.com/vllm-project/vllm/blob/main/vllm/entrypoints/speech_to_text/realtime/connection.py
+
+    It answers one word of `text` per audio chunk, as a streaming model decodes what it has
+    heard so far, and the rest when the generation ends."""
+
+    text: str = ""
+    corrected: str = ""
+    """What transcription.done carries when the generation's final text differs from the
+    deltas it streamed, as a model that revises its running transcript leaves it."""
+    answer_delay_s: float = 0.0
+    """How long the generation takes to finish after the audio ends."""
+    silent: bool = False
+    """Accepts audio and answers nothing, as a server with no speech to report does."""
+    fail_after_chunks: int | None = None
+    """Emits an error event instead of the next delta, as a dying engine does. Counted over
+    the server's life, not per connection, so an engine can die after the service is up."""
+
+    appends: int = 0
+    models: list[str] = field(default_factory=list)
+    audio: bytearray = field(default_factory=bytearray)
+    generations: int = 0
+    open_finals: int = 0
+    concurrent_finals: int = 0
+    """The most final commits this server was answering at once, which is how many callers
+    it was finishing an utterance for at once."""
+
+    def app(self) -> FastAPI:
+        app = FastAPI()
+
+        @app.websocket("/v1/realtime")
+        async def realtime(ws: WebSocket) -> None:
+            await ws.accept()
+            await ws.send_json({"type": "session.created", "id": "sess-fake", "created": 0})
+            words, said, generating = self.text.split(), 0, False
+            while True:
+                try:
+                    event = await ws.receive_json()
+                except (WebSocketDisconnect, RuntimeError):
+                    return
+                kind = event.get("type")
+                if kind == "session.update":
+                    self.models.append(event.get("model"))
+                elif kind == "input_audio_buffer.append":
+                    self.audio += base64.b64decode(event["audio"])
+                    self.appends += 1
+                    if self.appends == self.fail_after_chunks:
+                        await ws.send_json({"type": "error", "error": "engine died"})
+                    elif generating and not self.silent and said < len(words):
+                        await ws.send_json(
+                            {"type": "transcription.delta", "delta": _spoken(words, said)}
+                        )
+                        said += 1
+                elif kind == "input_audio_buffer.commit":
+                    if not self.models:
+                        await ws.send_json({"type": "error", "error": "model not validated"})
+                    elif not event.get("final"):
+                        generating, said = True, 0
+                        self.generations += 1
+                    elif not self.silent:
+                        self.open_finals += 1
+                        self.concurrent_finals = max(self.concurrent_finals, self.open_finals)
+                        for index in range(said, len(words)):
+                            await ws.send_json(
+                                {"type": "transcription.delta", "delta": _spoken(words, index)}
+                            )
+                        await asyncio.sleep(self.answer_delay_s)
+                        await ws.send_json(
+                            {"type": "transcription.done", "text": self.corrected or self.text}
+                        )
+                        generating = False
+                        self.open_finals -= 1
+
+        return app
+
+
+def _spoken(words: list[str], index: int) -> str:
+    return words[index] if index == 0 else f" {words[index]}"
+
+
+@dataclass
+class FakeVllmOmniSpeech:
+    """Speaks vLLM-Omni's speech API as its docs and server describe it: POST
+    /v1/audio/speech with stream_format="audio" answers 200 with raw PCM bytes and no
+    framing, a request it will not serve is refused with a status before the body, and an
+    engine that dies mid-stream can only truncate that body -- the raw form carries no
+    error frame.
+    https://github.com/vllm-project/vllm-omni/blob/main/docs/serving/speech_api.md
+
+    `audio` stands in for the model, and the body is cut into chunks that do not fall on
+    sample boundaries, as a network does."""
+
+    audio: Callable[[str], bytes] = lambda text: b""
+    chunk_bytes: int = 777
+    refuses: str = "FAIL"
+    """Input text the engine refuses, as a model that cannot serve the request does."""
+    refusal_status: int = 500
+    """The status it refuses with: 500 for an engine that failed, 400 for a request its
+    checkpoint cannot serve."""
+    truncates: str = ""
+    """Input text whose body stops after one chunk, as an engine that dies mid-stream
+    leaves it: the raw form has no error frame to send instead."""
+    requests: list[dict[str, Any]] = field(default_factory=list)
+
+    def app(self) -> FastAPI:
+        app = FastAPI()
+
+        @app.post("/v1/audio/speech")
+        async def speech(request: Request) -> Response:
+            payload = await request.json()
+            self.requests.append(payload)
+            if error := self._refusal(payload):
+                return JSONResponse({"error": error}, status_code=error["code"])
+            return StreamingResponse(self._body(payload["input"]), media_type="audio/pcm")
+
+        return app
+
+    def _refusal(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+        if not payload.get("input"):
+            return _omni_error("Input text cannot be empty", 400)
+        if payload.get("stream_format") == "audio" or payload.get("stream"):
+            if payload.get("response_format") not in ("pcm", "wav"):
+                return _omni_error("Streaming requires response_format pcm or wav", 400)
+            if payload.get("speed", 1.0) != 1.0:
+                return _omni_error("Streaming requires speed 1.0", 400)
+        if payload["input"] == self.refuses:
+            return _omni_error(
+                "Qwen3-TTS CustomVoice checkpoint does not support task_type='VoiceDesign'"
+                if self.refusal_status == 400
+                else "engine failed to start generation",
+                self.refusal_status,
+            )
+        return None
+
+    async def _body(self, text: str) -> AsyncIterator[bytes]:
+        pcm = self.audio(text)
+        for sent, start in enumerate(range(0, len(pcm), self.chunk_bytes)):
+            if sent and text == self.truncates:
+                raise RuntimeError("engine died mid-stream")
+            yield pcm[start : start + self.chunk_bytes]
+
+
+def _omni_error(message: str, code: int) -> dict[str, Any]:
+    return {"message": message, "type": "BadRequestError", "param": None, "code": code}

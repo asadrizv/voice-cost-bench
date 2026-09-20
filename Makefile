@@ -1,6 +1,7 @@
 .DEFAULT_GOAL := help
 TEST_DB := postgresql://postgres:pg@localhost:55499/vcb
 PY := uv run
+GPU_HOST ?= host.docker.internal
 
 help: ## List targets
 	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-16s %s\n", $$1, $$2}'
@@ -13,6 +14,17 @@ up: ## Local stack: Postgres, LiveKit, API, agent, frontend, Prometheus, Grafana
 	@test -f .env || cp .env.example .env
 	docker compose up -d --build
 	@echo "app http://localhost:3000 · api http://localhost:8080/docs · grafana http://localhost:3001"
+
+gpu-targets: ## Point Prometheus at the GPU node: make gpu-targets GPU_HOST=<ip or hostname>
+	@printf '%s' '$(GPU_HOST)' | grep -Eq '^[A-Za-z0-9.-]+$$' \
+	  || { echo "GPU_HOST must be an IP or hostname, got '$(GPU_HOST)'" >&2; exit 1; }
+	@{ echo '['; \
+	  echo '  { "targets": ["$(GPU_HOST):8000"], "labels": { "service": "vllm" } },'; \
+	  echo '  { "targets": ["$(GPU_HOST):8001"], "labels": { "service": "whisper" } },'; \
+	  echo '  { "targets": ["$(GPU_HOST):8002"], "labels": { "service": "kokoro" } },'; \
+	  echo '  { "targets": ["$(GPU_HOST):9400"], "labels": { "service": "dcgm" } }'; \
+	  echo ']'; } > config/prometheus/gpu_targets.json
+	@echo "Prometheus scrapes $(GPU_HOST) within 10 s (config/prometheus/gpu_targets.json)"
 
 down: ## Stop the local stack
 	docker compose down
@@ -74,5 +86,5 @@ benchmark-sim: ## Same sweep against a simulated GPU: offline, for exercising th
 	$(PY) python -m backend.interfaces.cli.loadtest sweep --pipeline simulated --duration 20 \
 	  --out results/benchmark_simulated.json
 
-.PHONY: help install up down dev-api dev-agent dev-frontend migrate lint test-db test test-paid \
+.PHONY: help install up gpu-targets down dev-api dev-agent dev-frontend migrate lint test-db test test-paid \
 	e2e fixtures wer-audio wer baseline benchmark benchmark-sim

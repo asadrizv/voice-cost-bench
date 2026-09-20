@@ -8,11 +8,14 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-import yaml
 
+from backend.application.services.endpointing import EndpointerKind
+from backend.application.use_cases.describe_components import DescribedComponent
+from backend.domain.services.gpu_memory_budget import GpuMemoryBudget
 from backend.infrastructure.config.settings import REPO_ROOT, Settings
 from backend.infrastructure.telemetry.nvml_gpu_telemetry import detect_gpu_telemetry
 from backend.interfaces.cli.harness.caller import Conversation
+from backend.interfaces.http.serializers import described_component
 
 
 def _git(*args: str) -> str:
@@ -37,17 +40,49 @@ def _probe(url: str) -> Any:
         return {"error": type(exc).__name__}
 
 
+def _budget(budget: GpuMemoryBudget | None) -> dict[str, Any] | None:
+    """The arithmetic, not just the verdict: a reader who disagrees with a figure can redo
+    the sum, and every figure says where it came from."""
+    if budget is None:
+        return None
+    return {
+        "gpu": {
+            "sku": budget.gpu.sku,
+            "total_gib": float(budget.gpu.total_gib),
+            "basis": budget.gpu.basis,
+            "source": budget.gpu.source,
+        },
+        "components": [
+            {
+                "component": claim.component_id,
+                "gib": None if claim.gib is None else float(claim.gib),
+                "basis": claim.basis,
+                "source": claim.source,
+            }
+            for claim in budget.claims
+        ],
+        "claimed_gib": float(budget.claimed_gib),
+        "headroom_gib": float(budget.headroom_gib),
+        "shortfall_gib": float(budget.shortfall_gib),
+        "unknown": list(budget.unknown),
+        "verdict": budget.verdict.value,
+        "measured": budget.measured,
+        "summary": budget.summary(),
+    }
+
+
 def collect(
     settings: Settings,
     pipeline: str,
     conversation: Conversation,
-    endpointer: str,
+    endpointer: EndpointerKind,
     simulated: bool,
     rates_raw: dict[str, Any],
+    components: list[DescribedComponent],
+    budget: GpuMemoryBudget | None,
+    catalogue_version: int,
 ) -> dict[str, Any]:
     """Everything needed to reproduce or challenge a number, written with the number."""
-    serving_path = settings.config_dir / settings.serving_config
-    serving = yaml.safe_load(serving_path.read_text()) if serving_path.is_file() else {}
     gpu = detect_gpu_telemetry().snapshot()
     info: dict[str, Any] = {
         "generated_at": datetime.now(UTC).isoformat(),
@@ -69,7 +104,10 @@ def collect(
         },
         "persona": conversation.persona,
         "persona_sha256": _sha256(settings.personas_dir / f"{conversation.persona}.yaml"),
-        "endpointer": endpointer,
+        "endpointer": endpointer.value,
+        "component_catalogue_version": catalogue_version,
+        "gpu_memory_budget": _budget(budget),
+        "components": [described_component(d) for d in components],
         "harness_host": {
             "python": platform.python_version(),
             "machine": platform.machine(),
@@ -79,19 +117,15 @@ def collect(
     if pipeline == "api":
         api = rates_raw.get("api", {})
         info["models"] = {
-            "stt": f"deepgram {settings.deepgram_model}",
-            "llm": f"openai {settings.openai_model}",
-            "tts": f"elevenlabs {settings.elevenlabs_model}",
             "listed_in_rate_card": {k: v.get("model") for k, v in api.items()},
         }
+    elif settings.llm_server == "ollama":
+        info["models"] = {"llm_server": "ollama", "ollama_model": settings.vllm_model}
     else:
         vllm_root = settings.vllm_base_url.rsplit("/v1", 1)[0]
         info["models"] = {
-            "llm": {"model": serving.get("model"), "revision": serving.get("revision")},
             "vllm_version": None if simulated else _probe(f"{vllm_root}/version"),
             "serving_config": settings.serving_config,
-            "serving_config_sha256": _sha256(serving_path),
-            "stt": "faster-whisper (see whisper_service /health/deep)",
-            "tts": "kokoro (see kokoro_service /health/deep)",
+            "serving_config_sha256": _sha256(settings.serving_config_path),
         }
     return info

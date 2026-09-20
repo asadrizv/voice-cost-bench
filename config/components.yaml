@@ -1,0 +1,225 @@
+# Every component that touches a call: served at GET /transparency, copied into provenance.
+# configured_components picks the entries, but self-hosted STT and TTS follow their services'
+# reports. Startup fails on a missing entry (SELFHOSTED_ENGINES too) or a repeated model.
+version: 1
+
+# gpu_memory budgets what a component holds on its host's gpu; the LLM's line comes from
+# gpu-memory-utilization in config/serving/ instead, and a missing figure is never zero.
+hosts:
+  gpu_host:
+    region: "gpu-host (see deployment)"
+    leaves_eu: false
+    gpu:
+      sku: L40S                 # the card rates.yaml prices; every gpu_memory below shares it
+      total_gib: 48.0
+      basis: vendor-stated
+      source: >-
+        NVIDIA's 48 GB for the L40S. The driver reports a little less once ECC is on, so
+        this budget is optimistic by a few GiB; #10 replaces it with what nvidia-smi reports
+        on the benchmark pod.
+    assumption: >-
+      Runs wherever the GPU runs. leaves_eu assumes an EU host, as the priced RunPod L40S
+      (secure cloud, nl) is; on any other host this is false only if that host is in the EU.
+  app_host:
+    region: "app-host (see deployment)"
+    leaves_eu: false
+    assumption: >-
+      Runs beside the API and agent (docker compose or the operator's machine). leaves_eu
+      assumes that host is in the EU.
+
+components:
+  twilio:
+    kind: telephony
+    vendor: Twilio
+    model: Programmable Voice
+    version: vendor-managed
+    region: us
+    licence: proprietary
+    leaves_eu: true
+    assumption: >-
+      Priced in rates.yaml but not connected yet: calls arrive over WebRTC through
+      LiveKit. US region is Twilio's default without an EU edge contract.
+  telnyx:
+    kind: telephony
+    vendor: Telnyx
+    model: Elastic SIP Trunking
+    version: vendor-managed
+    region: global (nearest point of presence)
+    licence: proprietary
+    leaves_eu: true
+    assumption: >-
+      Priced in rates.yaml but not connected. Telnyx is US-based; no EU-only routing
+      contract is configured, so calls may leave the EU.
+  sipgate:
+    kind: telephony
+    vendor: sipgate
+    model: sipgate trunking
+    version: vendor-managed
+    region: de
+    licence: proprietary
+    leaves_eu: false
+    assumption: >-
+      Listed in rates.yaml but not connected. sipgate is a German carrier; that it keeps
+      calls in Germany is its published positioning, not checked against a contract.
+
+  deepgram:
+    kind: stt
+    vendor: Deepgram
+    version: vendor-managed
+    region: us
+    licence: proprietary
+    leaves_eu: true
+    assumption: Deepgram's default US endpoint; no EU endpoint is configured.
+  faster-whisper:
+    kind: stt
+    vendor: SYSTRAN faster-whisper (OpenAI Whisper weights)
+    model: large-v3-turbo
+    version: faster-whisper>=1.1
+    host: gpu_host
+    licence: MIT
+    gpu_memory:
+      gib: 3.0
+      basis: estimated
+      source: >-
+        Recon's figure, and the one gpu-memory-utilization: 0.72 in config/serving/ was set
+        against. Weights are 1.50 GiB (large-v3-turbo, fp16, measured on disk); the rest is
+        runtime. Not measured on an L40S (#10).
+    assumption: model is whisper_service's default; WHISPER_MODEL on the GPU host overrides it.
+  mlx:
+    kind: stt
+    vendor: MLX Whisper (OpenAI Whisper weights)
+    model: mlx-community/whisper-large-v3-turbo
+    version: mlx-whisper>=0.4
+    host: gpu_host
+    licence: MIT
+    # No gpu_memory: MLX is the Apple Silicon path and cannot run on the L40S, so any CUDA
+    # footprint for it would be invented. The budget reports it as unknown.
+    assumption: model is whisper_service's default; WHISPER_MLX_REPO overrides it.
+  voxtral:
+    kind: stt
+    vendor: Mistral AI Voxtral
+    model: Voxtral-Mini-4B-Realtime-2602
+    version: mlx-audio>=0.5.4
+    host: gpu_host
+    licence: Apache-2.0
+    gpu_memory:
+      gib: 9.98
+      basis: estimated
+      source: >-
+        bf16 weights are 8.48 GiB: 4.55B parameters, counted from the tensor shapes of the
+        4-bit MLX checkpoint this repo runs on Apple Silicon (2.92 GiB on disk). Plus 1.5 GiB
+        runtime, the gap between Whisper's measured weights and its figure above. An L40S
+        would serve bf16, through a vLLM process that reserves a share of the card rather
+        than this footprint -- vLLM's recipe asks for >= 16 GiB (gpu/README.md). Neither
+        figure is measured (#10).
+    assumption: >-
+      model and version are the Apple Silicon path; the CUDA runtime is vLLM's realtime API.
+      Either way the STT service reports the weights and the runtime that served the call at
+      /v1/info, which is what /transparency lists.
+
+  openai:
+    kind: llm
+    vendor: OpenAI
+    version: vendor-managed
+    region: us
+    licence: proprietary
+    leaves_eu: true
+    assumption: OpenAI's default US endpoint; no EU data residency is configured.
+  vllm:Qwen/Qwen3.5-9B:
+    kind: llm
+    vendor: Alibaba Cloud Qwen, served by vLLM
+    host: gpu_host
+    licence: see model card
+    assumption: Licence not verified here; read the Qwen3.5-9B model card at the pinned revision.
+  vllm:meta-llama/Llama-3.1-8B-Instruct:
+    kind: llm
+    vendor: Meta Llama, served by vLLM
+    host: gpu_host
+    licence: Llama 3.1 Community License
+  ollama:qwen3.5:9b:
+    kind: llm
+    vendor: Alibaba Cloud Qwen, served by Ollama
+    version: ollama library tag
+    host: gpu_host
+    licence: see model card
+    assumption: Licence not verified here; read the Qwen3.5-9B model card.
+
+  elevenlabs:
+    kind: tts
+    vendor: ElevenLabs
+    version: vendor-managed
+    region: us
+    licence: proprietary
+    leaves_eu: true
+    assumption: ElevenLabs' default US endpoint; no EU data residency is configured.
+  kokoro:
+    kind: tts
+    vendor: hexgrad Kokoro
+    model: Kokoro-82M
+    version: kokoro>=0.9.4
+    host: gpu_host
+    licence: Apache-2.0
+    gpu_memory:
+      gib: 1.0
+      basis: estimated
+      source: >-
+        Recon's figure, the other half of what gpu-memory-utilization: 0.72 was set against.
+        Weights are 0.31 GiB (measured on disk). Not measured on an L40S (#10).
+  qwen3-tts:
+    kind: tts
+    vendor: Alibaba Cloud Qwen
+    model: Qwen3-TTS-12Hz-1.7B-VoiceDesign
+    version: mlx-audio>=0.5.4
+    host: gpu_host
+    licence: Apache-2.0
+    gpu_memory:
+      gib: 5.48
+      basis: estimated
+      source: >-
+        bf16 weights are 3.98 GiB: 2.13B parameters (talker plus codec decoder), counted from
+        the tensor shapes of the 8-bit MLX checkpoint this repo runs (2.86 GiB on disk). Plus
+        the same 1.5 GiB runtime allowance as Voxtral. An L40S would serve bf16, through a
+        vLLM-Omni process that reserves a share of the card rather than this footprint
+        (gpu/README.md). Neither figure is measured (#10).
+    assumption: >-
+      The German voice is a written description, not a cloned recording. model and version
+      are the Apple Silicon path; the CUDA runtime is vLLM-Omni's speech API. Either way the
+      TTS service reports the weights and the runtime that served the call at /v1/info,
+      which is what /transparency lists.
+
+  livekit-server:
+    kind: orchestration
+    vendor: LiveKit server (self-run)
+    model: livekit-server
+    version: v1.13.7
+    host: app_host
+    licence: Apache-2.0
+    assumption: version is the docker compose image; a native livekit-server may differ.
+  livekit-cloud:
+    kind: orchestration
+    vendor: LiveKit Cloud
+    model: managed SFU
+    version: vendor-managed
+    region: global (nearest edge)
+    licence: proprietary
+    leaves_eu: true
+    assumption: LiveKit Cloud routes media through its nearest edge; no EU-only region is configured.
+
+  postgres:
+    kind: storage
+    vendor: PostgreSQL
+    model: postgres
+    version: "16"
+    host: app_host
+    licence: PostgreSQL License
+    assumption: >-
+      version is the docker compose image. Stores transcripts, latency and cost; never
+      audio.
+  in-memory:
+    kind: storage
+    vendor: none (process memory)
+    model: in-memory repository
+    version: n/a
+    host: app_host
+    licence: n/a
+    assumption: Nothing persists; call records vanish when the API restarts.

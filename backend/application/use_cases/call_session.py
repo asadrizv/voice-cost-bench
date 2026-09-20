@@ -134,7 +134,7 @@ class CallSession:
         self._ctx.meter.add_stt_audio(chunk.duration_seconds)
         self._stt_in.put_nowait(chunk)
         speech = self._vad.is_speech(chunk)
-        self._endpointer.observe_audio(speech, now)
+        self._endpointer.observe_audio(chunk, speech, now)
 
         if self.agent_busy:
             if self._barge_in_detected(speech, chunk.duration_seconds * 1000):

@@ -17,19 +17,20 @@ from livekit import rtc
 from livekit.agents import AutoSubscribe, JobContext, JobExecutorType, WorkerOptions, cli
 
 from backend.application.services.concurrency_supervisor import CapacityExceeded
-from backend.application.use_cases.start_call import BudgetExceeded
+from backend.application.services.endpointing import EndpointerKind
+from backend.application.use_cases.start_call import BudgetExceeded, VoiceNotAvailable
 from backend.domain.value_objects.audio import AudioChunk
 from backend.domain.value_objects.pipeline_kind import PipelineKind
-from backend.infrastructure.config.settings import get_settings
+from backend.infrastructure.config.settings import Settings, get_settings
 from backend.infrastructure.persistence.postgres_call_repository import SqlCallRepository
-from backend.infrastructure.pipeline_factory import MissingCredentials
+from backend.infrastructure.pipeline_factory import MissingCredentials, PipelineNotSelectable
 from backend.infrastructure.telemetry.http_metrics_sink import HttpMetricsSink
 from backend.infrastructure.transport.livekit_audio import (
     OUTPUT_SAMPLE_RATE,
     LiveKitAudioOutput,
     caller_audio,
 )
-from backend.interfaces.container import build_container
+from backend.interfaces.container import StaticConfig, build_container, load_static_config
 from backend.interfaces.http.routes_token import AGENT_NAME
 
 log = logging.getLogger("voice-cost-bench.agent")
@@ -93,7 +94,7 @@ async def entrypoint(ctx: JobContext) -> None:
     options = _call_options(ctx)
     pipeline = PipelineKind(options.get("pipeline", settings.pipeline.value))
     persona = options.get("persona", settings.persona)
-    endpointer = options.get("endpointer", settings.endpointer)
+    endpointer = EndpointerKind(options.get("endpointer", settings.endpointer))
 
     async with _connect_lock():
         await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
@@ -101,13 +102,19 @@ async def entrypoint(ctx: JobContext) -> None:
     track = await _first_audio_track(ctx, participant)
 
     metrics = HttpMetricsSink(settings.api_base_url, settings.internal_token)
-    container = build_container(settings, metrics)
+    container = build_container(settings, metrics, static=_static_config(settings))
     try:
         try:
             call_ctx = await container.start_call.execute(
                 pipeline, persona, source="browser", call_id=ctx.room.name
             )
-        except (BudgetExceeded, CapacityExceeded, MissingCredentials) as exc:
+        except (
+            BudgetExceeded,
+            CapacityExceeded,
+            MissingCredentials,
+            PipelineNotSelectable,
+            VoiceNotAvailable,
+        ) as exc:
             log.warning("call rejected: %s", exc)
             await _status(ctx, state="rejected", reason=str(exc))
             await asyncio.sleep(1)  # let the data message reach the browser
@@ -120,7 +127,9 @@ async def entrypoint(ctx: JobContext) -> None:
         await ctx.room.local_participant.publish_track(
             agent_track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
         )
-        session = container.session(call_ctx, LiveKitAudioOutput(source), endpointer=endpointer)
+        session = container.session(
+            call_ctx, LiveKitAudioOutput(source), container.endpointer(endpointer)
+        )
 
         # The mic stream doesn't reliably end on disconnect, so a pump feeds a queue that
         # hang-up can terminate even while no frames are arriving.
@@ -159,8 +168,44 @@ async def entrypoint(ctx: JobContext) -> None:
         ctx.shutdown()
 
 
+_static: StaticConfig | None = None
+
+
+def _static_config(settings: Settings) -> StaticConfig:
+    """The worker's parsed configuration, shared by every job thread — which is what keeps
+    a call's setup off the other calls' audio loops. See `load_static_config`.
+
+    `main` primes this before the worker accepts jobs; two job threads racing here would
+    each load a copy, so nothing that runs once belongs inside `load_static_config`.
+    """
+    global _static
+    if _static is None:
+        _static = load_static_config(settings)
+    return _static
+
+
+def _prewarm_endpointing() -> None:
+    """Loads Smart Turn whatever ENDPOINTER says, because any caller may ask for it: the
+    browser offers every endpointer the backend knows and /token accepts them all. Left to
+    the first call that selects it, onnxruntime's ~100 ms import runs on a job thread with
+    the GIL held, stalling five frames of audio in every call already in progress.
+
+    On its own thread so worker start-up waits for neither the import nor the 8.7 MB of
+    weights; both are cached for the life of the process.
+    """
+    try:
+        from backend.infrastructure.endpointing import smart_turn
+
+        smart_turn.warm()
+    except Exception:
+        # A worker that cannot load it still answers calls, at the silence ceiling.
+        log.warning("Smart Turn could not be pre-loaded", exc_info=True)
+
+
 def main() -> None:
     settings = get_settings()
+    _static_config(settings)
+    threading.Thread(target=_prewarm_endpointing, name="smart-turn-prewarm", daemon=True).start()
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,

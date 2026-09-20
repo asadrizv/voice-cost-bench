@@ -16,6 +16,23 @@ from backend.application.services.farewell import call_is_over
         ),
         ("Nein danke.", "Gern geschehen. Einen schönen Tag noch!", True),
         ("Can I speak to a lawyer?", "Of course. Transferring you now.", True),
+        # From a real call: the goodbye opens a long closing sentence.
+        (
+            "Oh, sorry. I think I have the wrong number. Bye.",
+            "Goodbye, thank you for calling Hartley and Weber.",
+            True,
+        ),
+        ("That's all, bye.", "Thank you for calling, have a lovely afternoon.", True),
+        (
+            "Tschüss!",
+            "Auf Wiederhören, und vielen Dank für Ihren Anruf bei Hartley und Weber.",
+            True,
+        ),
+        # A farewell that isn't the closing sentence, or a closing that asks something.
+        ("Bye.", "Goodbye? Before you go, could you confirm your email address?", False),
+        ("That's all.", "Thanks for calling. Is there anything else I can help with?", False),
+        ("Bye.", "Before we say goodbye, is there anything else I can do?", False),
+        ("Bye.", "", False),
         # Not over: only one side is saying goodbye, or neither.
         ("Anna Weber, thanks.", "Thank you, Anna. Is this a tenancy matter?", False),
         (

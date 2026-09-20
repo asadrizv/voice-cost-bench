@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from decimal import Decimal
 
+import httpx
+import yaml
+
+from backend.application.ports.component_catalogue import ComponentKind
 from backend.application.ports.pipeline_provider import Pipeline
+from backend.application.use_cases.check_gpu_budget import LlmShare
 from backend.domain.value_objects.pipeline_kind import PipelineKind
+from backend.infrastructure.config.component_catalogue import ConfiguredComponent, Selection
 from backend.infrastructure.config.settings import Settings
 from backend.infrastructure.llm.ollama_llm import OllamaLlm
 from backend.infrastructure.llm.openai_llm import OpenAILlm
@@ -16,6 +23,21 @@ from backend.infrastructure.tts.kokoro_tts import KokoroTts
 
 class MissingCredentials(RuntimeError):
     pass
+
+
+class PipelineNotSelectable(RuntimeError):
+    pass
+
+
+def require_selectable(settings: Settings, kind: PipelineKind) -> None:
+    """The other half of the EU-only profile: raises PipelineNotSelectable for a pipeline
+    the profile never verified, so a per-call choice cannot reach one whose components
+    startup would have refused."""
+    if kind not in settings.selectable_pipelines:
+        raise PipelineNotSelectable(
+            f"EU_ONLY serves the {settings.pipeline.value} pipeline only; "
+            f"the {kind.value} pipeline is not available"
+        )
 
 
 def _api(s: Settings) -> Pipeline:
@@ -52,8 +74,6 @@ def _selfhosted(s: Settings) -> Pipeline:
 
 def _simulated(kind: PipelineKind) -> Callable[[Settings], Pipeline]:
     def build(s: Settings) -> Pipeline:
-        import yaml
-
         from backend.infrastructure.simulated.gpu_model import (
             SimulatedGpu,
             SimulatedLlm,
@@ -91,6 +111,79 @@ class PipelineFactory:
         self._cache: dict[PipelineKind, Pipeline] = {}
 
     def resolve(self, kind: PipelineKind) -> Pipeline:
+        require_selectable(self._settings, kind)
         if kind not in self._cache:
             self._cache[kind] = self._builders[kind](self._settings)
         return self._cache[kind]
+
+
+SELFHOSTED_ENGINES: dict[ComponentKind, tuple[str, ...]] = {
+    ComponentKind.STT: ("faster-whisper", "mlx", "voxtral"),
+    ComponentKind.TTS: ("kokoro", "qwen3-tts"),
+}
+"""Every engine gpu/whisper_service and gpu/kokoro_service can run, by the id each reports
+at GET /v1/info. The first is what the service runs by default."""
+
+
+def configured_components(s: Settings, telephony: str) -> Selection:
+    """The catalogue entry each pipeline slot uses under these settings, mirroring the
+    builders above: a new adapter or engine needs a line here and an entry in
+    components.yaml, or startup fails."""
+    shared = {
+        ComponentKind.TELEPHONY: ConfiguredComponent(telephony),
+        ComponentKind.ORCHESTRATION: ConfiguredComponent(
+            "livekit-cloud" if ".livekit.cloud" in s.livekit_url else "livekit-server"
+        ),
+        ComponentKind.STORAGE: ConfiguredComponent("postgres" if s.database_url else "in-memory"),
+    }
+    return {
+        PipelineKind.API: {
+            **shared,
+            ComponentKind.STT: ConfiguredComponent("deepgram", model=s.deepgram_model),
+            ComponentKind.LLM: ConfiguredComponent("openai", model=s.openai_model),
+            ComponentKind.TTS: ConfiguredComponent("elevenlabs", model=s.elevenlabs_model),
+        },
+        PipelineKind.SELFHOSTED: {
+            **shared,
+            ComponentKind.STT: ConfiguredComponent(SELFHOSTED_ENGINES[ComponentKind.STT][0]),
+            ComponentKind.LLM: _selfhosted_llm(s),
+            ComponentKind.TTS: ConfiguredComponent(SELFHOSTED_ENGINES[ComponentKind.TTS][0]),
+        },
+    }
+
+
+def service_info_urls(s: Settings) -> dict[ComponentKind, str]:
+    """GET /v1/info on each self-hosted service, where it reports the engine it runs."""
+    stt = httpx.URL(s.whisper_ws_url)
+    return {
+        ComponentKind.STT: str(
+            stt.copy_with(scheme="https" if stt.scheme == "wss" else "http", path="/v1/info")
+        ),
+        ComponentKind.TTS: f"{s.kokoro_url.rstrip('/')}/v1/info",
+    }
+
+
+def llm_memory_share(s: Settings) -> LlmShare:
+    """What the LLM server takes off the card before anything else is placed on it."""
+    if s.llm_server == "ollama":
+        return LlmShare(None, "ollama reserves no fixed share of the card")
+    utilisation = _serving(s).get("gpu-memory-utilization")
+    if utilisation is None:
+        return LlmShare(None, f"no gpu-memory-utilization in {s.serving_config}")
+    return LlmShare(
+        Decimal(str(utilisation)), f"gpu-memory-utilization: {utilisation} in {s.serving_config}"
+    )
+
+
+def _selfhosted_llm(s: Settings) -> ConfiguredComponent:
+    if s.llm_server == "ollama":
+        return ConfiguredComponent(f"ollama:{s.vllm_model}", model=s.vllm_model)
+    serving = _serving(s)
+    model = str(serving["model"])
+    return ConfiguredComponent(f"vllm:{model}", model=model, version=str(serving["revision"]))
+
+
+def _serving(s: Settings) -> dict[str, object]:
+    """The vLLM flags the benchmark records as provenance. Raises MissingServingConfig when
+    SERVING_CONFIG names no file."""
+    return dict(yaml.safe_load(s.serving_config_path.read_text()))
