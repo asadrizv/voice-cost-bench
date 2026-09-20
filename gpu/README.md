@@ -83,7 +83,9 @@ to vLLM's `/v1/realtime` per utterance, sends base64 PCM16 at 16 kHz as the call
 and commits with `final: true` on a flush. If that server is unreachable the service fails
 its warm-up and refuses to start, rather than answering every flush with silence. The 480 ms
 transcription delay above is the mlx-audio path's setting: a vLLM realtime session carries
-only a model, so the CUDA path runs at whatever delay its server was started with.
+only a model, so the CUDA path runs at whatever delay its server was started with. It does
+serve `WHISPER_WORKERS` calls at once, where the Apple Silicon engine serves one: that
+engine's decoder state lives on the thread its model was built on, and a socket's does not.
 
 ### Voxtral against Whisper, measured (#29)
 
