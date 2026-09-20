@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends
 from backend.infrastructure.config.settings import Settings
 from backend.interfaces.container import Container
 from backend.interfaces.http.deps import container, settings
-from backend.interfaces.http.serializers import component
+from backend.interfaces.http.serializers import described_component
 
 router = APIRouter()
 
@@ -42,14 +42,7 @@ async def transparency(
         "selfhosted_on_local_machine": s.selfhosted_on_local_machine,
         "eu_only": s.eu_only,
         "pipelines": {
-            kind.value: [
-                {
-                    **component(d.component),
-                    "confirmed": d.confirmed,
-                    "unconfirmed_reason": d.unconfirmed_reason,
-                }
-                for d in await c.describe_components.execute(kind)
-            ]
+            kind.value: [described_component(d) for d in await c.describe_components.execute(kind)]
             for kind in s.selectable_pipelines
         },
     }

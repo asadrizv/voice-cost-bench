@@ -8,6 +8,7 @@ from backend.application.ports.component_catalogue import Component
 from backend.application.ports.rate_card_provider import TelephonyQuote
 from backend.application.use_cases.compare_pipelines import PipelineSummary
 from backend.application.use_cases.compute_call_cost import CallCostReport
+from backend.application.use_cases.describe_components import DescribedComponent
 from backend.domain.entities.call import Call, Turn
 from backend.domain.entities.cost import CostBreakdown, UsageUnits
 from backend.domain.services.cost_calculator import PipelineRates
@@ -33,6 +34,16 @@ def telephony_quote(q: TelephonyQuote) -> dict[str, Any]:
 
 def component(c: Component) -> dict[str, Any]:
     return {**asdict(c), "kind": c.kind.value}
+
+
+def described_component(d: DescribedComponent) -> dict[str, Any]:
+    """Shared by /transparency and the benchmark's provenance file: the two are meant to
+    name the same components, so a new Component field reaches both or neither."""
+    return {
+        **component(d.component),
+        "confirmed": d.confirmed,
+        "unconfirmed_reason": d.unconfirmed_reason,
+    }
 
 
 def turn(t: Turn) -> dict[str, Any]:

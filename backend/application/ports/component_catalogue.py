@@ -50,8 +50,6 @@ class ComponentCatalogue(Protocol):
         as the running configuration selects them."""
         ...
 
-
-class EngineCatalogue(ComponentCatalogue, Protocol):
     def engine(self, kind: ComponentKind, engine_id: str) -> Component | None:
         """The entry for an engine a self-hosted service can run, None for any other id."""
         ...

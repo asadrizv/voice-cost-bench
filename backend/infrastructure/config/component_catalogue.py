@@ -10,8 +10,8 @@ import yaml
 
 from backend.application.ports.component_catalogue import (
     Component,
+    ComponentCatalogue,
     ComponentKind,
-    EngineCatalogue,
     GpuMemoryProfile,
 )
 from backend.domain.services.gpu_memory_budget import BASES, GpuCapacity, MemoryClaim
@@ -81,7 +81,7 @@ class YamlComponentCatalogue:
 
 
 def require_eu_residency(
-    catalogue: EngineCatalogue, pipelines: Collection[PipelineKind], engines: Engines
+    catalogue: ComponentCatalogue, pipelines: Collection[PipelineKind], engines: Engines
 ) -> None:
     """The EU-only profile's gate: raises NotEuResident naming every component a call on
     those pipelines could touch that is not EU-resident. A self-hosted service picks its

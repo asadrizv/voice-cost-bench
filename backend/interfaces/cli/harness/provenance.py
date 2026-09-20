@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import platform
 import subprocess
-from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -16,6 +15,7 @@ from backend.domain.services.gpu_memory_budget import GpuMemoryBudget
 from backend.infrastructure.config.settings import REPO_ROOT, Settings
 from backend.infrastructure.telemetry.nvml_gpu_telemetry import detect_gpu_telemetry
 from backend.interfaces.cli.harness.caller import Conversation
+from backend.interfaces.http.serializers import described_component
 
 
 def _git(*args: str) -> str:
@@ -107,15 +107,7 @@ def collect(
         "endpointer": endpointer.value,
         "component_catalogue_version": catalogue_version,
         "gpu_memory_budget": _budget(budget),
-        "components": [
-            {
-                **asdict(d.component),
-                "kind": d.component.kind.value,
-                "confirmed": d.confirmed,
-                "unconfirmed_reason": d.unconfirmed_reason,
-            }
-            for d in components
-        ],
+        "components": [described_component(d) for d in components],
         "harness_host": {
             "python": platform.python_version(),
             "machine": platform.machine(),
