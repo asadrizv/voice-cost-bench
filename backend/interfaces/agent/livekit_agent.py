@@ -21,7 +21,7 @@ from backend.application.services.endpointing import EndpointerKind
 from backend.application.use_cases.start_call import BudgetExceeded
 from backend.domain.value_objects.audio import AudioChunk
 from backend.domain.value_objects.pipeline_kind import PipelineKind
-from backend.infrastructure.config.settings import get_settings
+from backend.infrastructure.config.settings import Settings, get_settings
 from backend.infrastructure.persistence.postgres_call_repository import SqlCallRepository
 from backend.infrastructure.pipeline_factory import MissingCredentials, PipelineNotSelectable
 from backend.infrastructure.telemetry.http_metrics_sink import HttpMetricsSink
@@ -30,7 +30,7 @@ from backend.infrastructure.transport.livekit_audio import (
     LiveKitAudioOutput,
     caller_audio,
 )
-from backend.interfaces.container import build_container, validate_static_config
+from backend.interfaces.container import StaticConfig, build_container, load_static_config
 from backend.interfaces.http.routes_token import AGENT_NAME
 
 log = logging.getLogger("voice-cost-bench.agent")
@@ -102,7 +102,7 @@ async def entrypoint(ctx: JobContext) -> None:
     track = await _first_audio_track(ctx, participant)
 
     metrics = HttpMetricsSink(settings.api_base_url, settings.internal_token)
-    container = build_container(settings, metrics)
+    container = build_container(settings, metrics, static=_static_config(settings))
     try:
         try:
             call_ctx = await container.start_call.execute(
@@ -167,9 +167,28 @@ async def entrypoint(ctx: JobContext) -> None:
         ctx.shutdown()
 
 
+_static: StaticConfig | None = None
+
+
+def _static_config(settings: Settings) -> StaticConfig:
+    """Loaded once per worker process and shared by every job thread, which is what keeps
+    a call's setup off the other calls' audio loops. See `load_static_config`."""
+    global _static
+    if _static is None:
+        _static = load_static_config(settings)
+    return _static
+
+
 def main() -> None:
     settings = get_settings()
-    validate_static_config(settings)
+    _static_config(settings)
+    if settings.endpointer is EndpointerKind.SMART_TURN:
+        # onnxruntime's import costs ~100 ms and would otherwise run on a job thread with
+        # the GIL held, stalling every call already in progress. The weights follow on the
+        # decision pool.
+        from backend.infrastructure.endpointing import smart_turn
+
+        smart_turn.warm()
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,

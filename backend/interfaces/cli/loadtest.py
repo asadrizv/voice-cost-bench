@@ -80,7 +80,8 @@ async def _sweep(args: argparse.Namespace) -> dict[str, Any]:
     # Asked before the first level, not after the last: the point of the budget is to be
     # read while the pod is still cheap to stop.
     components = await describer.execute(kind)
-    warn_over_budget(container.gpu_budget, [d.component for d in components], settings.eu_only)
+    budget = container.gpu_budget.execute([d.component for d in components])
+    warn_over_budget(budget, settings.eu_only)
 
     carriers = container.rates.telephony_quotes()
     results: list[dict[str, Any]] = []
@@ -123,7 +124,7 @@ async def _sweep(args: argparse.Namespace) -> dict[str, Any]:
             simulated,
             container.rates.raw(),
             components,
-            container.gpu_budget.execute([d.component for d in components]),
+            budget,
             container.catalogue.version(),
         ),
         "budgets_ms": report.budgets(),

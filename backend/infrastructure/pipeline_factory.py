@@ -167,8 +167,7 @@ def llm_memory_share(s: Settings) -> LlmShare:
     """What the LLM server takes off the card before anything else is placed on it."""
     if s.llm_server == "ollama":
         return LlmShare(None, "ollama reserves no fixed share of the card")
-    serving = yaml.safe_load(s.serving_config_path.read_text())
-    utilisation = serving.get("gpu-memory-utilization")
+    utilisation = _serving(s).get("gpu-memory-utilization")
     if utilisation is None:
         return LlmShare(None, f"no gpu-memory-utilization in {s.serving_config}")
     return LlmShare(
@@ -179,6 +178,12 @@ def llm_memory_share(s: Settings) -> LlmShare:
 def _selfhosted_llm(s: Settings) -> ConfiguredComponent:
     if s.llm_server == "ollama":
         return ConfiguredComponent(f"ollama:{s.vllm_model}", model=s.vllm_model)
-    serving = yaml.safe_load(s.serving_config_path.read_text())
+    serving = _serving(s)
     model = str(serving["model"])
     return ConfiguredComponent(f"vllm:{model}", model=model, version=str(serving["revision"]))
+
+
+def _serving(s: Settings) -> dict[str, object]:
+    """The vLLM flags the benchmark records as provenance. Raises MissingServingConfig when
+    SERVING_CONFIG names no file."""
+    return dict(yaml.safe_load(s.serving_config_path.read_text()))
