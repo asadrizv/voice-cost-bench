@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import numpy as np
-
 from backend.domain.value_objects.audio import AudioChunk
+from backend.infrastructure.audio.level import AUDIBLE_DBFS, dbfs, unit_samples
 
 
 class EnergyVad:
@@ -19,7 +18,7 @@ class EnergyVad:
     def __init__(
         self,
         margin_db: float = 12.0,
-        min_threshold_dbfs: float = -45.0,
+        min_threshold_dbfs: float = AUDIBLE_DBFS,
         onset_ms: float = 60.0,
         onset_reset_ms: float = 120.0,
     ) -> None:
@@ -34,9 +33,7 @@ class EnergyVad:
     def is_speech(self, chunk: AudioChunk) -> bool:
         if chunk.is_empty():
             return False
-        samples = np.frombuffer(chunk.data, dtype="<i2").astype(np.float32) / 32768.0
-        rms = float(np.sqrt(np.mean(samples * samples))) if samples.size else 0.0
-        level = 20 * np.log10(max(rms, 1e-6))
+        level = dbfs(unit_samples(chunk.data))
         threshold = max(self._noise_floor + self._margin, self._min_threshold)
         frame_ms = chunk.duration_seconds * 1000
 

@@ -19,6 +19,7 @@ from backend.application.ports.llm_port import ChatMessage, LlmEvent, TokenDelta
 from backend.application.ports.stt_port import FlushSignal, TranscriptEvent
 from backend.domain.entities.persona import SamplingParams
 from backend.domain.value_objects.audio import PCM16_24K_MONO, AudioChunk
+from backend.infrastructure.audio.level import AUDIBLE_DBFS, dbfs, unit_samples
 
 
 @dataclass(frozen=True)
@@ -55,8 +56,7 @@ class SimulatedGpu:
 
 
 def _voiced(chunk: AudioChunk) -> bool:
-    samples = np.frombuffer(chunk.data, dtype="<i2").astype(np.float32)
-    return bool(samples.size) and float(np.sqrt(np.mean(samples**2))) > 32768 * 0.0056  # -45 dBFS
+    return dbfs(unit_samples(chunk.data)) > AUDIBLE_DBFS
 
 
 # A quiet 40 ms, 220 Hz tone (whole cycles, so frames join without clicks): simulated
