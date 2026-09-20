@@ -26,6 +26,7 @@ MODEL_REVISION = "f766f81d3cfdf7737ac64aad813d91bbfd56bf93"
 
 SAMPLE_RATE = 16_000
 WINDOW_SAMPLES = 8 * SAMPLE_RATE
+"""The same window the detector buffers to as `endpointing.MODEL_WINDOW_S`, in samples."""
 WINDOW_BYTES = WINDOW_SAMPLES * 2
 N_FFT = 400
 HOP_LENGTH = 160

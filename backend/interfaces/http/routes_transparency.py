@@ -31,7 +31,9 @@ async def transparency(
              "confirmed": bool,  # false: the running engine is unknown, so this is the
                                  # catalogue's default for the slot
              "unconfirmed_reason": str  # "" when confirmed
-            }, ...  # one per kind, in that order
+            }, ...  # in ComponentKind order, but a kind may appear more than once: a
+                    # service running two engines (a German deployment runs two TTS
+                    # engines) is listed once per engine, and both took part in the call
          ]}}
 
     simulated true means calls run on a simulated GPU model, not these components.

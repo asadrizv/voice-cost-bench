@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from backend.application.ports.stt_port import TranscriptEvent
 from backend.domain.value_objects.audio import AudioChunk
@@ -28,4 +28,21 @@ class EndpointDetector(Protocol):
     @property
     def speech_end(self) -> float | None:
         """Monotonic time the caller last stopped speaking, for perceived_delay."""
+        ...
+
+
+@runtime_checkable
+class ReportsDecisions(Protocol):
+    """A detector that spends measurable work deciding, and can say how much and how often
+    that work failed. The benchmark publishes both, so a run whose model never answered
+    cannot be read as one that did."""
+
+    @property
+    def inference_ms(self) -> tuple[float, ...]:
+        """How long each decision took this call, in arrival order."""
+        ...
+
+    @property
+    def failures(self) -> int:
+        """Decisions the detector could not make, and fell back to its ceiling for."""
         ...

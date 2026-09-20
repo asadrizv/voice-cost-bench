@@ -6,9 +6,8 @@ import numpy.typing as npt
 from backend.domain.value_objects.audio import AudioChunk
 
 AUDIBLE_DBFS = -45.0
-"""EnergyVad's minimum speech threshold, read from here by the VAD itself rather than
-written twice. Nothing EnergyVad calls speech is inaudible here, so the harness's end of
-caller speech is never earlier than the endpointer's."""
+"""EnergyVad's minimum speech threshold. Nothing EnergyVad calls speech is inaudible here,
+so the harness's end of caller speech is never earlier than the endpointer's."""
 SILENCE_DBFS = -120.0
 WINDOW_S = 0.02
 
@@ -30,8 +29,8 @@ def dbfs(samples: npt.NDArray[np.float32]) -> float:
 def first_audible_s(chunk: AudioChunk) -> float | None:
     """Offset of the first 20 ms window whose RMS exceeds AUDIBLE_DBFS, or None if silent."""
     samples = unit_samples(chunk.data)
-    window = chunk.format.byte_count(WINDOW_S) // 2
-    for start in range(0, samples.size, window):
-        if dbfs(samples[start : start + window]) > AUDIBLE_DBFS:
-            return start / window * WINDOW_S
+    window_samples = chunk.format.byte_count(WINDOW_S) // 2
+    for start in range(0, samples.size, window_samples):
+        if dbfs(samples[start : start + window_samples]) > AUDIBLE_DBFS:
+            return start / window_samples * WINDOW_S
     return None

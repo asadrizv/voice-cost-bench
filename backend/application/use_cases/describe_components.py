@@ -76,5 +76,9 @@ class DescribeComponents:
 
 
 def _default(component: Component, why: str) -> list[DescribedComponent]:
-    """The catalogue's entry, standing in for a running engine that could not be named."""
+    """The catalogue's entry, standing in for a running engine that could not be named.
+
+    A simulated run does not come through here: nothing was running for the catalogue to
+    stand in for, so saying so would claim more than the run knows.
+    """
     return [DescribedComponent(component, f"{why}; listed from the catalogue's default")]

@@ -214,9 +214,10 @@ class SemanticEndpointDetector:
         return self._default
 
 
-WINDOW_S = 8.0
+MODEL_WINDOW_S = 8.0
 """What Smart Turn v3.2 reads: the last 8 s of the turn, left-padded when it is shorter.
-Source: pipecat-ai/smart-turn-v3 inference.py."""
+Source: pipecat-ai/smart-turn-v3 inference.py. The adapter pads to the same figure in its
+own units (`smart_turn.WINDOW_SAMPLES`); a model with a different window needs both."""
 PRE_SPEECH_S = 0.5
 """Room tone kept ahead of the caller's first word, so the model hears the turn start."""
 
@@ -249,7 +250,7 @@ class SmartTurnEndpointDetector:
         self._executor = executor
         self._timer = timer
         self._format = audio_format
-        self._window_bytes = audio_format.byte_count(WINDOW_S)
+        self._window_bytes = audio_format.byte_count(MODEL_WINDOW_S)
         self._pre_speech_bytes = audio_format.byte_count(PRE_SPEECH_S)
         self._inference_ms: list[float] = []
         self._failures = 0

@@ -39,7 +39,7 @@ class PacedAudioOutput:
 
     @property
     def unanswered_turns(self) -> int:
-        return self._unanswered + (self._caller_stopped_at is not None)
+        return self._unanswered + int(self.awaiting_answer)
 
     async def write(self, chunk: AudioChunk) -> None:
         now = self._clock.monotonic()

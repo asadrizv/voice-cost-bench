@@ -529,8 +529,11 @@ class StreamingTurn:
 
 
 def turns(transcriber: Transcriber | StreamingTranscriber) -> Callable[[str], Turn]:
+    """Builds a turn for the socket's `?language=`. A streaming transcriber is not told it:
+    the realtime models behind that protocol identify the language themselves and take no
+    language argument, so the socket's value is dropped here rather than half-applied."""
     if isinstance(transcriber, StreamingTranscriber):
-        return lambda language: StreamingTurn(transcriber)
+        return lambda _language: StreamingTurn(transcriber)
     return lambda language: BufferedTurn(transcriber.transcribe, language)
 
 

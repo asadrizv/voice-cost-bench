@@ -171,8 +171,12 @@ _static: StaticConfig | None = None
 
 
 def _static_config(settings: Settings) -> StaticConfig:
-    """Loaded once per worker process and shared by every job thread, which is what keeps
-    a call's setup off the other calls' audio loops. See `load_static_config`."""
+    """The worker's parsed configuration, shared by every job thread — which is what keeps
+    a call's setup off the other calls' audio loops. See `load_static_config`.
+
+    `main` primes this before the worker accepts jobs; two job threads racing here would
+    each load a copy, so nothing that runs once belongs inside `load_static_config`.
+    """
     global _static
     if _static is None:
         _static = load_static_config(settings)

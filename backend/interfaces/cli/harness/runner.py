@@ -6,9 +6,10 @@ import random
 import time
 from dataclasses import dataclass, field
 
+from backend.application.ports.endpoint_detector import ReportsDecisions
 from backend.application.ports.pipeline_provider import Pipeline
 from backend.application.services.concurrency_supervisor import CapacityExceeded
-from backend.application.services.endpointing import EndpointerKind, SmartTurnEndpointDetector
+from backend.application.services.endpointing import EndpointerKind
 from backend.application.use_cases.start_call import BudgetExceeded
 from backend.domain.entities.call import Call
 from backend.domain.value_objects.pipeline_kind import PipelineKind
@@ -104,7 +105,7 @@ class LevelRunner:
             except Exception:
                 log.exception("call %s failed", ctx.call.id)
                 result.failed += 1
-            if isinstance(detector, SmartTurnEndpointDetector):
+            if isinstance(detector, ReportsDecisions):
                 result.endpoint_inference_ms.extend(detector.inference_ms)
                 result.endpoint_failures += detector.failures
             result.reply_timeouts += caller.timeouts
