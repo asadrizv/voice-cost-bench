@@ -17,7 +17,7 @@ from backend.domain.value_objects.audio import PCM16_24K_MONO, AudioChunk
 from backend.infrastructure.audio.wav import frames, read_wav
 from backend.infrastructure.stt.deepgram_stt import DeepgramStt
 from backend.infrastructure.stt.whisper_stt import WhisperStt
-from gpu.whisper_service.app import create_app
+from gpu.whisper_service.app import create_app, selected_transcriber
 from tests.integration.servers import FakeDeepgram, run_asgi
 
 AUDIO = Path(__file__).resolve().parents[2] / "fixtures" / "audio" / "intake_en" / "00.wav"
@@ -151,6 +151,24 @@ async def test_whisper_service_drops_leading_silence_and_passes_language() -> No
     pcm, fmt = read_wav(AUDIO)
     assert final_seconds <= fmt.duration_seconds(len(pcm)) + 0.05
     assert language == "de"
+
+
+@pytest.mark.parametrize(("setting", "engine"), [(None, "faster-whisper"), ("mlx", "mlx")])
+def test_the_environment_says_which_engine_the_service_loads(
+    monkeypatch: pytest.MonkeyPatch, setting: str | None, engine: str
+) -> None:
+    monkeypatch.delenv("WHISPER_BACKEND", raising=False)
+    if setting is not None:
+        monkeypatch.setenv("WHISPER_BACKEND", setting)
+    assert selected_transcriber().engine == engine
+
+
+def test_an_engine_this_service_cannot_run_is_refused_at_startup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WHISPER_BACKEND", "parakeet")
+    with pytest.raises(RuntimeError, match="parakeet"):
+        selected_transcriber()
 
 
 def test_whisper_drops_low_confidence_segments() -> None:

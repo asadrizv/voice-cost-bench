@@ -111,10 +111,21 @@ TRANSCRIBERS: tuple[type[FasterWhisperTranscriber | MlxWhisperTranscriber], ...]
 """Every engine this service can run; the API's catalogue must name each one."""
 
 
-def default_transcriber() -> Transcriber:
+def selected_transcriber() -> type[FasterWhisperTranscriber | MlxWhisperTranscriber]:
+    """The engine WHISPER_BACKEND names, refused here rather than quietly replaced: a typo
+    would otherwise put a different engine behind a benchmark run and its provenance."""
     backend = os.environ.get("WHISPER_BACKEND", FasterWhisperTranscriber.engine)
-    chosen = next((t for t in TRANSCRIBERS if t.engine == backend), FasterWhisperTranscriber)
-    return chosen()
+    chosen = next((t for t in TRANSCRIBERS if t.engine == backend), None)
+    if chosen is None:
+        raise RuntimeError(
+            f"WHISPER_BACKEND names {backend!r}; this service runs "
+            f"{sorted(t.engine for t in TRANSCRIBERS)}"
+        )
+    return chosen
+
+
+def default_transcriber() -> Transcriber:
+    return selected_transcriber()()
 
 
 class Utterance:
