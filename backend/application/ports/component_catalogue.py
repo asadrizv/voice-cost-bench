@@ -55,3 +55,7 @@ class EngineCatalogue(ComponentCatalogue, Protocol):
     def engine(self, kind: ComponentKind, engine_id: str) -> Component | None:
         """The entry for an engine a self-hosted service can run, None for any other id."""
         ...
+
+    def gpu_memory(self) -> GpuMemoryProfile | None:
+        """The GPU the catalogue places components on, None when no host has one."""
+        ...
