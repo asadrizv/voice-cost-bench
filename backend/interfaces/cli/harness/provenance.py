@@ -12,6 +12,7 @@ import httpx
 
 from backend.application.services.endpointing import EndpointerKind
 from backend.application.use_cases.describe_components import DescribedComponent
+from backend.domain.services.gpu_memory_budget import GpuMemoryBudget
 from backend.infrastructure.config.settings import REPO_ROOT, Settings
 from backend.infrastructure.telemetry.nvml_gpu_telemetry import detect_gpu_telemetry
 from backend.interfaces.cli.harness.caller import Conversation
@@ -39,6 +40,37 @@ def _probe(url: str) -> Any:
         return {"error": type(exc).__name__}
 
 
+def _budget(budget: GpuMemoryBudget | None) -> dict[str, Any] | None:
+    """The arithmetic, not just the verdict: a reader who disagrees with a figure can redo
+    the sum, and every figure says where it came from."""
+    if budget is None:
+        return None
+    return {
+        "gpu": {
+            "sku": budget.gpu.sku,
+            "total_gib": float(budget.gpu.total_gib),
+            "basis": budget.gpu.basis,
+            "source": budget.gpu.source,
+        },
+        "components": [
+            {
+                "component": claim.component_id,
+                "gib": None if claim.gib is None else float(claim.gib),
+                "basis": claim.basis,
+                "source": claim.source,
+            }
+            for claim in budget.claims
+        ],
+        "claimed_gib": float(budget.claimed_gib),
+        "headroom_gib": float(budget.headroom_gib),
+        "shortfall_gib": float(budget.shortfall_gib),
+        "unknown": list(budget.unknown),
+        "verdict": budget.verdict.value,
+        "measured": budget.measured,
+        "summary": budget.summary(),
+    }
+
+
 def collect(
     settings: Settings,
     pipeline: str,
@@ -47,6 +79,7 @@ def collect(
     simulated: bool,
     rates_raw: dict[str, Any],
     components: list[DescribedComponent],
+    budget: GpuMemoryBudget | None,
     catalogue_version: int,
 ) -> dict[str, Any]:
     """Everything needed to reproduce or challenge a number, written with the number."""
@@ -73,6 +106,7 @@ def collect(
         "persona_sha256": _sha256(settings.personas_dir / f"{conversation.persona}.yaml"),
         "endpointer": endpointer.value,
         "component_catalogue_version": catalogue_version,
+        "gpu_memory_budget": _budget(budget),
         "components": [
             {
                 **asdict(d.component),

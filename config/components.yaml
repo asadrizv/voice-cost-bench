@@ -1,11 +1,10 @@
 # Every component that touches a call: served at GET /transparency, copied into provenance.
 # configured_components picks the entries, but self-hosted STT and TTS follow their services'
 # reports. Startup fails on a missing entry (SELFHOSTED_ENGINES too) or a repeated model.
-# gpu_memory feeds the memory budget check for components on a GPU host. The LLM's line comes
-# from gpu-memory-utilization in config/serving/ instead, and a component with no figure is
-# budgeted as unknown, never as nothing.
 version: 1
 
+# gpu_memory budgets what a component holds on its host's gpu; the LLM's line comes from
+# gpu-memory-utilization in config/serving/ instead, and a missing figure is never zero.
 hosts:
   gpu_host:
     region: "gpu-host (see deployment)"

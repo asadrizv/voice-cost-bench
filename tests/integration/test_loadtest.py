@@ -20,13 +20,14 @@ from backend.domain.value_objects.audio import PCM16_24K_MONO, AudioChunk
 from backend.domain.value_objects.pipeline_kind import PipelineKind
 from backend.infrastructure.config.settings import MissingServingConfig, Settings
 from backend.infrastructure.persistence.inmemory_call_repository import InMemoryCallRepository
+from backend.infrastructure.pricing.yaml_rate_card import YamlRateCardProvider
 from backend.infrastructure.simulated.gpu_model import SimulatedGpu, SimulatedGpuProfile
 from backend.infrastructure.transport.paced_output import PacedAudioOutput
 from backend.interfaces.cli import loadtest
 from backend.interfaces.cli.harness import provenance, report
 from backend.interfaces.cli.harness.caller import Conversation, load_conversation
 from backend.interfaces.cli.harness.runner import LevelRun, LevelRunner
-from backend.interfaces.container import build_container
+from backend.interfaces.container import build_catalogue, build_container, build_gpu_budget_check
 from tests.fakes import FakeClock, NullMetrics
 
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
@@ -334,6 +335,7 @@ def test_provenance_records_what_ran_and_whether_it_was_confirmed(
             DescribedComponent(stt, ""),
             DescribedComponent(tts, "the tts service did not report what it runs"),
         ],
+        budget=None,
         catalogue_version=7,
     )
 
@@ -382,6 +384,7 @@ def test_provenance_hashes_the_serving_config_vllm_starts_from() -> None:
         simulated=True,
         rates_raw={},
         components=[],
+        budget=None,
         catalogue_version=7,
     )
 
@@ -404,6 +407,7 @@ def test_provenance_refuses_to_record_a_serving_config_that_does_not_exist() -> 
             simulated=True,
             rates_raw={},
             components=[],
+            budget=None,
             catalogue_version=7,
         )
 
@@ -468,6 +472,7 @@ def test_provenance_of_an_ollama_run_records_no_vllm_serving_config() -> None:
         simulated=False,
         rates_raw={},
         components=[],
+        budget=None,
         catalogue_version=1,
     )
 
@@ -528,3 +533,74 @@ def test_the_harness_accepts_smart_turn_as_an_endpointer() -> None:
         ["run", "--pipeline", "simulated", "--endpointer", "smart_turn"]
     )
     assert args.endpointer is EndpointerKind.SMART_TURN
+
+
+def test_provenance_records_whether_the_engines_that_ran_fit_the_card() -> None:
+    """A published run has to carry the memory arithmetic behind it: the figures are
+    estimates, and a reader can only weigh them if each one says where it came from."""
+    settings = Settings(database_url="")
+    catalogue = build_catalogue(settings, YamlRateCardProvider(settings.rates_path))
+    describe = [
+        DescribedComponent(c, "")
+        for c in catalogue.components(PipelineKind.SELFHOSTED)
+        if c.kind is ComponentKind.LLM
+    ] + [
+        DescribedComponent(catalogue.engine(ComponentKind.STT, "voxtral"), ""),  # type: ignore[arg-type]
+        DescribedComponent(catalogue.engine(ComponentKind.TTS, "qwen3-tts"), ""),  # type: ignore[arg-type]
+    ]
+    check = build_gpu_budget_check(settings, catalogue)
+
+    info = provenance.collect(
+        settings,
+        "selfhosted",
+        Conversation("intake_en", "law_firm", "en", ["Hello."], [[]]),
+        EndpointerKind.SEMANTIC,
+        simulated=True,
+        rates_raw={},
+        components=describe,
+        budget=check.execute([d.component for d in describe]),
+        catalogue_version=1,
+    )
+
+    budget = info["gpu_memory_budget"]
+    assert budget["gpu"] == {
+        "sku": "L40S",
+        "total_gib": 48.0,
+        "basis": "vendor-stated",
+        "source": catalogue.gpu_memory().gpu.source,  # type: ignore[union-attr]
+    }
+    assert budget["verdict"] == "does not fit"
+    assert budget["shortfall_gib"] == 2.02
+    assert budget["measured"] is False
+    figures = {c["component"]: c for c in budget["components"]}
+    assert set(figures) == {"vllm:Qwen/Qwen3.5-9B", "voxtral", "qwen3-tts"}
+    assert figures["voxtral"]["gib"] == 9.98
+    assert "4-bit MLX checkpoint" in figures["voxtral"]["source"]
+    assert figures["qwen3-tts"]["basis"] == "estimated"
+    assert figures["vllm:Qwen/Qwen3.5-9B"]["gib"] == 34.56
+    assert figures["vllm:Qwen/Qwen3.5-9B"]["source"] == (
+        "gpu-memory-utilization: 0.72 in qwen-9b-l40s.yaml"
+    )
+    assert budget["summary"].endswith("2.02 GiB short (does not fit)")
+
+
+def test_provenance_of_an_api_run_budgets_no_gpu_memory() -> None:
+    settings = Settings(database_url="")
+    catalogue = build_catalogue(settings, YamlRateCardProvider(settings.rates_path))
+    components = [DescribedComponent(c, "") for c in catalogue.components(PipelineKind.API)]
+
+    info = provenance.collect(
+        settings,
+        "api",
+        Conversation("intake_en", "law_firm", "en", ["Hello."], [[]]),
+        EndpointerKind.SEMANTIC,
+        simulated=True,
+        rates_raw={},
+        components=components,
+        budget=build_gpu_budget_check(settings, catalogue).execute(
+            [d.component for d in components]
+        ),
+        catalogue_version=1,
+    )
+
+    assert info["gpu_memory_budget"] is None

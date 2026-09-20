@@ -32,7 +32,7 @@ from backend.infrastructure.telemetry.http_metrics_sink import HttpMetricsSink
 from backend.interfaces.cli.harness import provenance, report
 from backend.interfaces.cli.harness.caller import load_conversation
 from backend.interfaces.cli.harness.runner import LevelRunner
-from backend.interfaces.container import Container, build_container
+from backend.interfaces.container import Container, build_container, warn_over_budget
 from backend.interfaces.http.serializers import telephony_quote
 
 log = logging.getLogger("loadtest")
@@ -77,6 +77,11 @@ async def _sweep(args: argparse.Namespace) -> dict[str, Any]:
     gpu = SimulatedGpu() if simulated else None
     runner = LevelRunner(container, kind, conversation, args.endpointer, simulated=gpu)
 
+    # Asked before the first level, not after the last: the point of the budget is to be
+    # read while the pod is still cheap to stop.
+    components = await describer.execute(kind)
+    warn_over_budget(container.gpu_budget, [d.component for d in components])
+
     carriers = container.rates.telephony_quotes()
     results: list[dict[str, Any]] = []
     try:
@@ -117,7 +122,8 @@ async def _sweep(args: argparse.Namespace) -> dict[str, Any]:
             args.endpointer,
             simulated,
             container.rates.raw(),
-            await describer.execute(kind),
+            components,
+            container.gpu_budget.execute([d.component for d in components]),
             container.catalogue.version(),
         ),
         "budgets_ms": report.budgets(),

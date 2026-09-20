@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import shutil
 from decimal import Decimal
 from pathlib import Path
@@ -27,7 +28,11 @@ from backend.infrastructure.config.component_catalogue import (
 )
 from backend.infrastructure.config.settings import REPO_ROOT, Settings
 from backend.infrastructure.pricing.yaml_rate_card import YamlRateCardProvider
-from backend.interfaces.container import build_catalogue, build_gpu_budget_check
+from backend.interfaces.container import (
+    build_catalogue,
+    build_gpu_budget_check,
+    validate_static_config,
+)
 
 GPU = "L40S"
 
@@ -310,3 +315,28 @@ def test_a_second_host_with_a_gpu_fails_at_startup(tmp_path: Path) -> None:
 
     with pytest.raises(ComponentCatalogueError, match="app_host, gpu_host"):
         build_catalogue(settings, YamlRateCardProvider(settings.rates_path))
+
+
+def test_startup_warns_when_the_configured_engines_overrun_the_card(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    settings = Settings(database_url="", config_dir=config_with(tmp_path, "0.95"))
+
+    with caplog.at_level(logging.WARNING):
+        validate_static_config(settings)
+
+    [warning] = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert "GPU memory budget" in warning.getMessage()
+    assert "1.60 GiB short (does not fit)" in warning.getMessage()
+
+
+def test_startup_says_nothing_when_the_configured_engines_fit(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The default single-GPU configuration is the quiet case; only trouble is announced."""
+    settings = Settings(database_url="", config_dir=config_with(tmp_path, "0.72"))
+
+    with caplog.at_level(logging.WARNING):
+        validate_static_config(settings)
+
+    assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
