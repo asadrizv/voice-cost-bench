@@ -325,7 +325,7 @@ async def test_transparency_names_the_stt_engine_the_whisper_service_runs() -> N
 
 
 async def test_a_service_running_an_engine_without_a_catalogue_entry_is_unconfirmed() -> None:
-    transcriber = IdentifiedTranscriber("voxtral", "mistralai/Voxtral-Mini-3B")
+    transcriber = IdentifiedTranscriber("parakeet", "nvidia/parakeet-tdt-0.6b-v3")
     async with run_asgi(whisper_app(lambda: transcriber, workers=1)) as host:
         stacks = await transparency_of(
             SETTINGS.model_copy(update={"whisper_ws_url": f"ws://{host}/v1/stream"})
@@ -335,7 +335,7 @@ async def test_a_service_running_an_engine_without_a_catalogue_entry_is_unconfir
     assert (stt["id"], stt["model"]) == ("faster-whisper", "large-v3-turbo")
     assert stt["confirmed"] is False
     assert stt["unconfirmed_reason"] == (
-        "the stt service runs 'voxtral', which has no catalogue entry; "
+        "the stt service runs 'parakeet', which has no catalogue entry; "
         "listed from the catalogue's default"
     )
 

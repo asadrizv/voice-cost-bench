@@ -42,6 +42,24 @@ docker compose -f gpu/docker-compose.gpu.yml up -d   # SERVING_CONFIG=<file in c
 containers' self-hosted traffic there; the default is the machine running compose.
 `make gpu-targets GPU_HOST=<ip or hostname>` points Prometheus at the same node.
 
+## STT engines
+
+`WHISPER_BACKEND` (default `faster-whisper`) says which engine `whisper_service` loads; an
+id it cannot run is refused at startup, `GET /v1/info` reports the one it loaded, and every
+engine listed in `TRANSCRIBERS` needs an entry in `config/components.yaml` or the API
+refuses to start. The WebSocket protocol is the same whichever is loaded.
+
+| Engine | Model | Runtime |
+|---|---|---|
+| `faster-whisper` | `WHISPER_MODEL`, default `large-v3-turbo` | faster-whisper on CUDA |
+| `mlx` | `WHISPER_MLX_REPO` | mlx-whisper, Apple Silicon only |
+| `voxtral` | `VOXTRAL_MLX_REPO` | mlx-audio, Apple Silicon only |
+
+Whisper re-transcribes the utterance buffer for every result; Voxtral decodes as the caller
+speaks, at a 480 ms transcription delay, and detects the language itself. Its 4-bit weights
+are ~3.1 GB, downloaded on first load, so a deployment that leaves `WHISPER_BACKEND` alone
+never fetches them.
+
 ## TTS engines
 
 `kokoro_service` routes each request to an engine by its voice id: `<engine>:<voice>` goes
@@ -65,3 +83,6 @@ so a deployment that leaves `TTS_ENGINES` alone never downloads them.
   transformers, so streaming comes from mlx-audio, which needs Metal. The CUDA backend
   (vLLM-Omni) is #32; until it lands, a GPU node can only serve German through Kokoro's
   English voices.
+- **Voxtral runs on Apple Silicon only.** Its realtime architecture is served on CUDA by
+  vLLM's realtime endpoint, which is a separate engine (#32); mlx-audio is the only
+  streaming runtime that needs no CUDA. Until that lands, a GPU node runs Whisper.

@@ -100,7 +100,7 @@ class PipelineFactory:
 
 
 SELFHOSTED_ENGINES: dict[ComponentKind, tuple[str, ...]] = {
-    ComponentKind.STT: ("faster-whisper", "mlx"),
+    ComponentKind.STT: ("faster-whisper", "mlx", "voxtral"),
     ComponentKind.TTS: ("kokoro", "qwen3-tts"),
 }
 """Every engine gpu/whisper_service and gpu/kokoro_service can run, by the id each reports

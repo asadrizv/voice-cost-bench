@@ -76,6 +76,16 @@ components:
     host: gpu_host
     licence: MIT
     assumption: model is whisper_service's default; WHISPER_MLX_REPO overrides it.
+  voxtral:
+    kind: stt
+    vendor: Mistral AI Voxtral
+    model: Voxtral-Mini-4B-Realtime-2602
+    version: mlx-audio>=0.5.4
+    host: gpu_host
+    licence: Apache-2.0
+    assumption: >-
+      model and version are the Apple Silicon path; VOXTRAL_MLX_REPO names the quantisation
+      actually loaded and the STT service reports it at /v1/info.
 
   openai:
     kind: llm

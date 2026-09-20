@@ -35,7 +35,8 @@ Then run `ollama serve`, `livekit-server --dev`, the Whisper and Kokoro services
 (`WHISPER_BACKEND=mlx uv run --extra local uvicorn gpu.whisper_service.app:app --factory
 --port 8001`, and `TTS_ENGINES=kokoro,qwen3-tts uv run --extra local uvicorn
 gpu.kokoro_service.app:app --factory --port 8002`, which downloads ~3 GB of Qwen3-TTS
-weights the first time), and the API and agent with
+weights the first time; `WHISPER_BACKEND=voxtral` swaps Whisper for streaming Voxtral, see
+`gpu/README.md`), and the API and agent with
 `LLM_SERVER=ollama VLLM_BASE_URL=http://localhost:11434/v1 VLLM_MODEL=qwen3.5:9b
 SELFHOSTED_ON_LOCAL_MACHINE=true`. Latency on a laptop is not a benchmark figure; the call
 screen says so.
