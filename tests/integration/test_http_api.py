@@ -486,6 +486,36 @@ async def test_a_service_report_is_reused_for_a_minute() -> None:
         assert (stt["id"], stt["confirmed"]) == ("mlx", True)
 
 
+async def test_requests_arriving_together_share_one_probe_of_the_service() -> None:
+    """The cache is what keeps a public endpoint from becoming load on the GPU services,
+    and a cache that writes only after the answer arrives protects nothing: every request
+    in the first window misses and probes. Ten callers, one probe."""
+    probes = 0
+    released = asyncio.Event()
+    info = FastAPI()
+
+    @info.get("/v1/info")
+    async def report() -> dict[str, list[dict[str, str]]]:
+        nonlocal probes
+        probes += 1
+        await released.wait()
+        return {"engines": [{"id": "kokoro", "model": "hexgrad/Kokoro-82M"}]}
+
+    async with run_asgi(info) as host:
+        settings = SETTINGS.model_copy(update={"kokoro_url": f"http://{host}"})
+        async with api_client(settings) as client:
+            waiting = [asyncio.create_task(client.get("/transparency")) for _ in range(10)]
+            while probes == 0:
+                await asyncio.sleep(0.01)
+            released.set()
+            answers = await asyncio.gather(*waiting)
+
+    assert probes == 1
+    for answer in answers:
+        tts = [c for c in answer.json()["pipelines"]["selfhosted"] if c["kind"] == "tts"]
+        assert [(c["id"], c["confirmed"]) for c in tts] == [("kokoro", True)]
+
+
 async def test_an_unreachable_service_leaves_its_default_listed_but_unconfirmed() -> None:
     async with api_client(SETTINGS) as client:
         response = await client.get("/transparency")
