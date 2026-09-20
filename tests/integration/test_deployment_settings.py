@@ -4,6 +4,7 @@ same meaning (#26)."""
 from __future__ import annotations
 
 import re
+from decimal import Decimal
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -118,3 +119,35 @@ def test_the_runpod_script_serves_each_cuda_backend_on_the_port_its_default_url_
         parsed = urlparse(url)
         assert parsed.hostname == "127.0.0.1"
         assert f"--port {parsed.port}" in script
+
+
+def _started_with(text: str, variable: str) -> Decimal:
+    """The share a file starts the server on, as `${VARIABLE:-default}`."""
+    default = re.search(rf"\$\{{{variable}:-([\d.]+)\}}", text)
+    assert default is not None, f"{variable} is passed with no default"
+    return Decimal(default.group(1))
+
+
+@pytest.mark.parametrize(
+    ("variable", "reported", "stages"),
+    [
+        ("VOXTRAL_GPU_FRACTION", VllmVoxtralTranscriber.gpu_fraction, 1),
+        ("QWEN3_TTS_GPU_FRACTION", VllmOmniQwen3TtsSynthesizer.gpu_fraction, 2),
+    ],
+)
+def test_the_share_a_server_is_started_with_is_the_share_the_budget_reads(
+    variable: str, reported: float | None, stages: int
+) -> None:
+    """The GPU budget is only as good as this: it reads what the services report, and they
+    report the variable compose and the pod script start the server with. A default changed
+    in one file and not the others puts the single-GPU verdict out of step with the card it
+    describes (#34). `stages` is how many processes the server runs behind that one share."""
+    compose = _started_with((REPO_ROOT / "gpu" / "docker-compose.gpu.yml").read_text(), variable)
+    script = _started_with((REPO_ROOT / "gpu" / "runpod" / "start.sh").read_text(), variable)
+    documented = re.search(
+        rf"^# {variable}=([\d.]+)", (REPO_ROOT / ".env.example").read_text(), re.M
+    )
+
+    assert reported is not None
+    assert compose == script == Decimal(str(reported)) / stages
+    assert documented is not None and Decimal(documented.group(1)) == compose

@@ -3,7 +3,9 @@
 POST /v1/synthesize {"text": str, "voice": str, "speed": float}
   -> 200, body streams raw PCM16 LE, 24 kHz, mono, one segment at a time.
 
-GET /v1/info -> {"engines": [{"id": str, "model": str}]}, every engine synthesis can route to.
+GET /v1/info -> {"engines": [{"id": str, "model": str, "gpu_fraction": float | null}]}, every
+engine synthesis can route to, with the share of the card its runtime reserves up front (null
+when it holds only its weights).
 
 The voice picks the engine: `<engine>:<voice>` goes to that engine, a bare id to Kokoro.
 Kokoro doesn't batch across requests, so synthesis runs on a bounded pool; beyond it
@@ -21,8 +23,9 @@ import time
 from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from decimal import Decimal
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 import httpx
 import numpy as np
@@ -49,6 +52,10 @@ class Synthesizer(Protocol):
     engine: str
     """The engine's id in config/components.yaml, where /transparency names it from."""
     model: str
+    gpu_fraction: float | None
+    """The share of the card this runtime reserves up front, or None when it holds only what
+    it loads. A vLLM-Omni server takes its share whether or not a call is in flight, so a
+    budget that counts its weights understates it by the difference; see gpu/README.md."""
     warmup_voice: str
     """A voice this engine speaks, used to ready it before the first caller arrives."""
 
@@ -63,6 +70,7 @@ class Synthesizer(Protocol):
 
 class KokoroSynthesizer:
     engine = backend = "kokoro"
+    gpu_fraction = None
     model = "hexgrad/Kokoro-82M"
     warmup_voice = "af_heart"
 
@@ -94,6 +102,18 @@ class KokoroSynthesizer:
         pipeline = self._pipeline(voice[0])
         for _, _, audio in pipeline(text, voice=voice, speed=speed):  # type: ignore[operator]
             yield np.asarray(audio, dtype=np.float32)
+
+
+QWEN3_TTS_DEFAULT_FRACTION = "0.30"
+"""What vLLM-Omni's bundled qwen3_tts.yaml gives each of its two stages. Kept in step with
+gpu/docker-compose.gpu.yml and gpu/runpod/start.sh by the deployment-settings tests."""
+
+
+def reserved_fraction(variable: str, default: str, stages: int = 1) -> float:
+    """The share of one card a vLLM-family server reserves, read from the variable the
+    deployment passes it. `stages` is how many such processes the server runs behind that
+    one setting."""
+    return float(Decimal(os.environ.get(variable) or default) * stages)
 
 
 VOICES_PATH = Path(os.environ.get("QWEN3_TTS_VOICES") or Path(__file__).with_name("voices.yaml"))
@@ -131,6 +151,7 @@ class Qwen3TtsSynthesizer(DesignedVoices):
     CUDA runtime for this engine is VllmOmniQwen3TtsSynthesizer; see gpu/README.md."""
 
     backend = "qwen3-tts"
+    gpu_fraction = None
     model = os.environ.get("QWEN3_TTS_MODEL", "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit")
 
     def __init__(self) -> None:
@@ -177,6 +198,11 @@ class VllmOmniQwen3TtsSynthesizer(DesignedVoices):
     vLLM-Omni's own client reads it as."""
 
     backend = "qwen3-tts-vllm"
+    gpu_fraction = reserved_fraction("QWEN3_TTS_GPU_FRACTION", QWEN3_TTS_DEFAULT_FRACTION, stages=2)
+    """Two stages, talker and code2wav, each given this share by vLLM-Omni's bundled
+    qwen3_tts.yaml -- so the server holds twice what the one variable reads. Whether the
+    single --gpu-memory-utilization these files pass overrides both is untested; counting it
+    once would understate the server on the only card anyone has to run it on."""
 
     def __init__(
         self,
@@ -404,8 +430,13 @@ def create_app(
         return {"status": "ok"}
 
     @app.get("/v1/info")
-    async def info() -> dict[str, list[dict[str, str]]]:
-        return {"engines": [{"id": s.engine, "model": s.model} for s in synthesizers.values()]}
+    async def info() -> dict[str, list[dict[str, Any]]]:
+        return {
+            "engines": [
+                {"id": s.engine, "model": s.model, "gpu_fraction": s.gpu_fraction}
+                for s in synthesizers.values()
+            ]
+        }
 
     @app.get("/health/deep")
     async def deep() -> JSONResponse:

@@ -446,3 +446,48 @@ def test_a_serving_config_that_sets_no_memory_share_cannot_settle_the_budget(
 
     assert claim.component_id == "vllm:Qwen/Qwen3.5-9B"
     assert claim.source == "no gpu-memory-utilization in qwen-9b-l40s.yaml"
+
+
+def test_a_runtime_that_reserves_a_fraction_is_budgeted_by_the_fraction() -> None:
+    """A vLLM process does not hold what its weights weigh: it reserves the share of the
+    card it was started with, up front, whether or not a call is in flight. Budgeting its
+    footprint instead is what made the one automated guardrail answer 'fits' for the
+    configuration it exists to guard (#34)."""
+    reserved = {"voxtral": Decimal("0.34")}
+
+    budget = check(voxtral="9.98", kokoro="1.0").execute(
+        selection("voxtral", "kokoro"), reserved=reserved
+    )
+
+    assert budget is not None
+    claims = {c.component_id: c for c in budget.claims}
+    assert claims["voxtral"].gib == Decimal("16.32")  # 0.34 of a 48 GiB card, not 9.98
+    assert claims["kokoro"].gib == Decimal("1.0")  # nothing reserves for Kokoro
+    assert "0.34" in claims["voxtral"].source
+    assert budget.verdict is BudgetVerdict.DOES_NOT_FIT
+    assert budget.shortfall_gib == Decimal("3.88")  # 34.56 + 16.32 + 1.00 - 48
+
+
+def test_the_cuda_speech_runtimes_do_not_fit_one_l40s_beside_the_shipped_llm() -> None:
+    """gpu/README.md states this in prose; until now nothing computed it. Voxtral 0.34 and
+    vLLM-Omni 0.30 to each of its two stages, beside the LLM's 0.72 share."""
+    catalogue, budget_check = shipped()
+
+    budget = budget_check.execute(
+        engines(catalogue, "voxtral", "qwen3-tts"),
+        reserved={"voxtral": Decimal("0.34"), "qwen3-tts": Decimal("0.60")},
+    )
+
+    assert budget is not None
+    assert budget.verdict is BudgetVerdict.DOES_NOT_FIT
+    assert budget.claimed_gib == Decimal("79.68")  # 34.56 + 16.32 + 28.80
+    assert budget.shortfall_gib == Decimal("31.68")
+
+
+def test_a_reserved_fraction_is_ignored_for_a_component_that_is_not_on_the_card() -> None:
+    budget = check(whisper="3.0", kokoro="1.0").execute(
+        selection("whisper", "kokoro"), reserved={"deepgram": Decimal("0.5")}
+    )
+
+    assert budget is not None
+    assert [c.component_id for c in budget.claims] == ["llm", "whisper", "kokoro"]

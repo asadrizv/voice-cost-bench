@@ -2,12 +2,24 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+from decimal import Decimal
 
 import httpx
 
 from backend.application.ports.clock import Clock
 from backend.application.ports.component_catalogue import ComponentKind
 from backend.application.ports.running_engines import Engine, EngineReportUnavailable
+
+
+def _engine(reported: dict[str, object]) -> Engine:
+    """A service that predates gpu_fraction reports none, which reads as "holds its weights"
+    — the same answer the budget gave before any service reported a share."""
+    share = reported.get("gpu_fraction")
+    return Engine(
+        str(reported["id"]),
+        str(reported["model"]),
+        None if share is None else Decimal(str(share)),
+    )
 
 
 class HttpRunningEngines:
@@ -58,10 +70,10 @@ class HttpRunningEngines:
         try:
             response = await self._http(asyncio.get_running_loop()).get(url)
             response.raise_for_status()
-            return [Engine(str(e["id"]), str(e["model"])) for e in response.json()["engines"]]
+            return [_engine(e) for e in response.json()["engines"]]
         except httpx.HTTPStatusError as exc:
             raise EngineReportUnavailable(f"HTTP {exc.response.status_code}") from exc
         except httpx.HTTPError as exc:
             raise EngineReportUnavailable(type(exc).__name__) from exc
-        except (ValueError, KeyError, TypeError) as exc:
+        except (ValueError, KeyError, TypeError, AttributeError) as exc:
             raise EngineReportUnavailable("malformed report") from exc

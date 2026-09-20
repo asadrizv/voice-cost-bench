@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, replace
+from decimal import Decimal
 
 from backend.application.ports.component_catalogue import (
     Component,
@@ -19,6 +20,10 @@ class DescribedComponent:
     component: Component
     unconfirmed_reason: str
     """Empty when what runs is known; otherwise why the catalogue's default is listed."""
+    gpu_fraction: Decimal | None = None
+    """The share of the card this component's runtime reserves, as its service reports it.
+    None where nothing reserves a share, and always None for an unconfirmed entry: the
+    catalogue's default says nothing about what the process that is actually running holds."""
 
     @property
     def confirmed(self) -> bool:
@@ -71,7 +76,9 @@ class DescribeComponents:
                 return _default(
                     default, f"the {kind} service runs {engine.id!r}, which has no catalogue entry"
                 )
-            entries.append(DescribedComponent(replace(entry, model=engine.model), ""))
+            entries.append(
+                DescribedComponent(replace(entry, model=engine.model), "", engine.gpu_fraction)
+            )
         return entries
 
 

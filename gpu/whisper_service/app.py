@@ -6,7 +6,9 @@ Protocol (per call, one socket):
   -> {"type": "close"}
   <- {"type": "transcript", "text": str, "is_final": bool, "flushed": bool}
 
-GET /v1/info -> {"engines": [{"id": str, "model": str}]}, what the loaded engine runs.
+GET /v1/info -> {"engines": [{"id": str, "model": str, "gpu_fraction": float | null}]}, what
+the loaded engine runs and what share of the card its runtime reserves up front (null when it
+holds only its weights).
 
 Whisper isn't a streaming model. Interims come from re-transcribing the growing utterance
 buffer, and only when a worker is idle, so they never delay another call's final. Voxtral
@@ -28,7 +30,8 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from decimal import Decimal
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -88,12 +91,17 @@ class Transcriber(Protocol):
     engine: str
     """The engine's id in config/components.yaml, where /transparency names it from."""
     model: str
+    gpu_fraction: float | None
+    """The share of the card this runtime reserves up front, or None when it holds only what
+    it loads. A vLLM server takes its share whether or not a call is in flight, so a budget
+    that counts its weights understates it by the difference; see gpu/README.md."""
 
     def transcribe(self, audio: np.ndarray, language: str) -> str: ...
 
 
 class FasterWhisperTranscriber:
     engine = backend = "faster-whisper"
+    gpu_fraction = None
     model = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
 
     def __init__(self) -> None:
@@ -122,6 +130,7 @@ class MlxWhisperTranscriber:
     its latency says nothing about the L40S benchmark."""
 
     engine = backend = "mlx"
+    gpu_fraction = None
     model = os.environ.get("WHISPER_MLX_REPO", "mlx-community/whisper-large-v3-turbo")
 
     def __init__(self) -> None:
@@ -174,6 +183,19 @@ class StreamingTranscriber(Protocol):
     def session(self) -> TranscriptionSession: ...
 
 
+VOXTRAL_DEFAULT_FRACTION = "0.34"
+"""vLLM's own Voxtral recipe asks for a GPU with >= 16 GiB for the bf16 weights, which is
+0.34 of an L40S. Kept in step with gpu/docker-compose.gpu.yml and gpu/runpod/start.sh by
+tests/integration/test_deployment_settings.py."""
+
+
+def reserved_fraction(variable: str, default: str, stages: int = 1) -> float:
+    """The share of one card a vLLM-family server reserves, read from the variable the
+    deployment passes it. `stages` is how many such processes the server runs behind that
+    one setting."""
+    return float(Decimal(os.environ.get(variable) or default) * stages)
+
+
 VOXTRAL_DELAY_MS = 480
 """How much audio the encoder gathers before the decoder emits. Mistral's recommended
 setting and the sweet spot between latency and word error rate; must be a multiple of 80 ms.
@@ -191,6 +213,7 @@ class VoxtralTranscriber:
     passed on."""
 
     engine = backend = "voxtral"
+    gpu_fraction = None
     model = os.environ.get("VOXTRAL_MLX_REPO", "mlx-community/Voxtral-Mini-4B-Realtime-2602-4bit")
     sessions_share_one_thread = True
 
@@ -268,6 +291,9 @@ class VllmVoxtralTranscriber:
 
     engine = "voxtral"
     backend = "voxtral-vllm"
+    gpu_fraction = reserved_fraction("VOXTRAL_GPU_FRACTION", VOXTRAL_DEFAULT_FRACTION)
+    """Read from the same variable the compose file and runpod/start.sh pass the server, so
+    the figure the budget uses and the figure the server is started with cannot drift."""
     sessions_share_one_thread = False
     """The model is in another process, so a session holds a socket rather than a decoder:
     a call waiting on the server must not stop the other calls being served."""
@@ -682,9 +708,17 @@ def create_app(
         return {"status": "ok"}
 
     @app.get("/v1/info")
-    async def info() -> dict[str, list[dict[str, str]]]:
+    async def info() -> dict[str, list[dict[str, Any]]]:
         transcriber: Transcriber = state["transcriber"]  # type: ignore[assignment]
-        return {"engines": [{"id": transcriber.engine, "model": transcriber.model}]}
+        return {
+            "engines": [
+                {
+                    "id": transcriber.engine,
+                    "model": transcriber.model,
+                    "gpu_fraction": transcriber.gpu_fraction,
+                }
+            ]
+        }
 
     @app.get("/health/deep")
     async def deep() -> JSONResponse:

@@ -80,7 +80,10 @@ async def _sweep(args: argparse.Namespace) -> dict[str, Any]:
     # Asked before the first level, not after the last: the point of the budget is to be
     # read while the pod is still cheap to stop.
     components = await describer.execute(kind)
-    budget = container.gpu_budget.execute([d.component for d in components])
+    budget = container.gpu_budget.execute(
+        [d.component for d in components],
+        reserved={d.component.id: d.gpu_fraction for d in components if d.gpu_fraction},
+    )
     warn_over_budget(budget, settings.eu_only)
 
     carriers = container.rates.telephony_quotes()

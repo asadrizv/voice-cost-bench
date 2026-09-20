@@ -141,8 +141,12 @@ than 1.0, which vLLM-Omni does not stream.
 **The CUDA speech engines do not fit beside the LLM on one L40S at its shipped share.**
 They are served by vLLM processes, and a vLLM process does not take what its model weighs:
 it reserves the fraction of the card you give it, up front, whether or not a call is in
-flight. The budget in `config/components.yaml` counts model footprints, so it understates
-what these runtimes hold.
+flight.
+
+The benchmark computes this rather than leaving it to this table: each service reports the
+share its runtime reserves at `GET /v1/info`, and `CheckGpuBudget` reads that in place of the
+footprint in `config/components.yaml`. A sweep on this configuration prints the arithmetic
+below and refuses to call it a fit. The table is here to show where the numbers come from.
 
 On a 48 GiB L40S, with the shares this repo ships:
 

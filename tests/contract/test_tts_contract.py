@@ -42,6 +42,7 @@ class StubSynth:
     """Kokoro's stub. Its tone says which engine served a request."""
 
     engine, model, warmup_voice, hz = "kokoro", "hexgrad/Kokoro-82M", "af_heart", 220.0
+    gpu_fraction = None
     voices = ("af_heart",)
 
     def speaks(self, voice: str) -> bool:
@@ -260,8 +261,8 @@ async def test_the_service_reports_every_engine_it_can_route_to() -> None:
         engines = (await client.get("/v1/info")).json()["engines"]
 
     assert engines == [
-        {"id": "kokoro", "model": "hexgrad/Kokoro-82M"},
-        {"id": "qwen3-tts", "model": Qwen3TtsSynthesizer.model},
+        {"id": "kokoro", "model": "hexgrad/Kokoro-82M", "gpu_fraction": None},
+        {"id": "qwen3-tts", "model": Qwen3TtsSynthesizer.model, "gpu_fraction": None},
     ]
 
 
@@ -381,9 +382,15 @@ async def test_the_cuda_engine_is_reported_as_qwen3_tts_by_the_runtime_that_serv
     ):
         engines = (await client.get("/v1/info")).json()["engines"]
 
+    # 0.30 to each of vLLM-Omni's two stages: the server holds twice the one setting, and
+    # the GPU budget reads this rather than the engine's weights (#34).
     assert engines == [
-        {"id": "kokoro", "model": "hexgrad/Kokoro-82M"},
-        {"id": "qwen3-tts", "model": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign (vLLM-Omni)"},
+        {"id": "kokoro", "model": "hexgrad/Kokoro-82M", "gpu_fraction": None},
+        {
+            "id": "qwen3-tts",
+            "model": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign (vLLM-Omni)",
+            "gpu_fraction": 0.6,
+        },
     ]
 
 

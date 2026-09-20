@@ -74,6 +74,7 @@ class StubSession:
 class StubStreamingTranscriber:
     engine, backend = VoxtralTranscriber.engine, VoxtralTranscriber.backend
     model = VoxtralTranscriber.model
+    gpu_fraction = VoxtralTranscriber.gpu_fraction
     speech_floor_dbfs = VoxtralTranscriber.speech_floor_dbfs
     sessions_share_one_thread = VoxtralTranscriber.sessions_share_one_thread
 
@@ -385,7 +386,9 @@ async def test_the_service_reports_the_streaming_engine_it_loaded() -> None:
     ):
         info = (await client.get("/v1/info")).json()
 
-    assert info["engines"] == [{"id": "voxtral", "model": VoxtralTranscriber.model}]
+    assert info["engines"] == [
+        {"id": "voxtral", "model": VoxtralTranscriber.model, "gpu_fraction": None}
+    ]
 
 
 async def test_the_cuda_engine_is_reported_as_voxtral_by_the_runtime_that_served_it() -> None:
@@ -404,8 +407,14 @@ async def test_the_cuda_engine_is_reported_as_voxtral_by_the_runtime_that_served
         ):
             info = (await client.get("/v1/info")).json()
 
+    # The share reaches the GPU budget from here: a vLLM server reserves it up front, so
+    # budgeting this engine's weights understated it by the difference (#34).
     assert info["engines"] == [
-        {"id": "voxtral", "model": "mistralai/Voxtral-Mini-4B-Realtime-2602 (vLLM realtime)"}
+        {
+            "id": "voxtral",
+            "model": "mistralai/Voxtral-Mini-4B-Realtime-2602 (vLLM realtime)",
+            "gpu_fraction": 0.34,
+        }
     ]
 
 

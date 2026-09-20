@@ -5,6 +5,7 @@ import json
 import logging
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ from backend.application.ports.pipeline_provider import Pipeline
 from backend.application.use_cases.handle_call_turn import TurnRequest
 from backend.application.use_cases.start_call import VoiceNotAvailable
 from backend.domain.entities.latency import TurnTimeline
+from backend.domain.services.gpu_memory_budget import BudgetVerdict
 from backend.domain.value_objects.pipeline_kind import PipelineKind
 from backend.infrastructure.config.component_catalogue import (
     ComponentCatalogueError,
@@ -327,6 +329,8 @@ async def test_transparency_follows_the_catalogue_and_the_running_configuration(
 
 
 class IdentifiedTranscriber:
+    gpu_fraction = None
+
     def __init__(self, engine: str, model: str) -> None:
         self.engine, self.model = engine, model
 
@@ -365,6 +369,7 @@ async def test_a_service_running_an_engine_without_a_catalogue_entry_is_unconfir
 
 class KokoroStub:
     engine, model = KokoroSynthesizer.engine, KokoroSynthesizer.model
+    gpu_fraction = KokoroSynthesizer.gpu_fraction
     warmup_voice = KokoroSynthesizer.warmup_voice
 
     def speaks(self, voice: str) -> bool:
@@ -384,11 +389,11 @@ async def test_transparency_confirms_the_tts_engine_the_kokoro_service_runs() ->
     assert (tts["confirmed"], tts["unconfirmed_reason"]) == (True, "")
 
 
-async def serving(engines: list[dict[str, str]]) -> FastAPI:
+async def serving(engines: list[dict[str, Any]]) -> FastAPI:
     info = FastAPI()
 
     @info.get("/v1/info")
-    async def report() -> dict[str, list[dict[str, str]]]:
+    async def report() -> dict[str, list[dict[str, Any]]]:
         return {"engines": engines}
 
     return info
@@ -909,3 +914,33 @@ async def test_a_deployment_without_the_german_voice_refuses_the_call_not_the_gr
 
     assert english.persona.id == "law_firm"
     assert await container.repository.list() == [english.call]
+
+
+async def test_the_budget_reads_the_share_a_cuda_runtime_reserves_not_its_weights() -> None:
+    """End to end for #34: the services report what their vLLM processes reserve, and the
+    check that guards the single-GPU claim reads that. Budgeting the catalogue's footprints
+    instead answered 'fits' for exactly the deployment the check exists to guard."""
+    reported = [
+        {"id": "voxtral", "model": "mistralai/Voxtral-Mini-4B-Realtime-2602 (vLLM realtime)"},
+        {"id": "qwen3-tts", "model": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign (vLLM-Omni)"},
+    ]
+    async with (
+        run_asgi(await serving([{**reported[0], "gpu_fraction": 0.34}])) as stt,
+        run_asgi(await serving([{**reported[1], "gpu_fraction": 0.6}])) as tts,
+    ):
+        settings = SETTINGS.model_copy(
+            update={"whisper_ws_url": f"ws://{stt}/v1/stream", "kokoro_url": f"http://{tts}"}
+        )
+        container = build_container(settings, NullMetrics())  # type: ignore[arg-type]
+        components = await container.describe_components.execute(PipelineKind.SELFHOSTED)
+
+    budget = container.gpu_budget.execute(
+        [d.component for d in components],
+        reserved={d.component.id: d.gpu_fraction for d in components if d.gpu_fraction},
+    )
+
+    assert budget is not None
+    assert budget.verdict is BudgetVerdict.DOES_NOT_FIT
+    # 0.72 + 0.34 + 0.60 of a 48 GiB card: 34.56 + 16.32 + 28.80.
+    assert budget.claimed_gib == Decimal("79.68")
+    assert "voxtral 16.32" in budget.summary() and "qwen3-tts 28.80" in budget.summary()
