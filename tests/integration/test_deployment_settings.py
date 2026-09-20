@@ -80,6 +80,18 @@ def test_the_gpu_compose_points_each_cuda_backend_at_the_server_that_serves_it(
     assert VllmOmniQwen3TtsSynthesizer().base_url == f"http://qwen3-tts-vllm:{speech_port}"
 
 
+def test_the_environment_names_the_weights_each_cuda_backend_expects_to_be_served(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each backend names the model in its request, so a server holding other weights
+    refuses it; the pod and the compose file set these to what they start the servers on."""
+    monkeypatch.setenv("VOXTRAL_VLLM_MODEL", "acme/voxtral-fork")
+    monkeypatch.setenv("QWEN3_TTS_VLLM_MODEL", "acme/qwen3-tts-fork")
+
+    assert VllmVoxtralTranscriber().served_model == "acme/voxtral-fork"
+    assert VllmOmniQwen3TtsSynthesizer().served_model == "acme/qwen3-tts-fork"
+
+
 def test_the_runpod_script_serves_each_cuda_backend_on_the_port_its_default_url_names(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
