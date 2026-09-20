@@ -1,10 +1,12 @@
 """SttPort contract, run against every implementation: Deepgram (against a server speaking
-its protocol from fixtures) and both engines of the STT service (real gpu/whisper_service
-code with the model swapped for a stub)."""
+its protocol from fixtures), both Apple Silicon engines of the STT service (real
+gpu/whisper_service code with the model swapped for a stub) and its CUDA engine (real
+backend code against a server speaking vLLM's realtime protocol)."""
 
 from __future__ import annotations
 
 import asyncio
+import socket
 import threading
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -20,17 +22,23 @@ from backend.infrastructure.audio.wav import frames, read_wav
 from backend.infrastructure.stt.deepgram_stt import DeepgramStt
 from backend.infrastructure.stt.whisper_stt import WhisperStt
 from gpu.whisper_service.app import (
+    WARMUP_PCM,
     TranscriptionSession,
+    VllmVoxtralTranscriber,
     VoxtralTranscriber,
     create_app,
     selected_transcriber,
+    to_samples,
 )
-from tests.integration.servers import FakeDeepgram, run_asgi
+from tests.integration.servers import FakeDeepgram, FakeVllmRealtime, run_asgi
 
 AUDIO = Path(__file__).resolve().parents[2] / "fixtures" / "audio" / "intake_en" / "00.wav"
 pytestmark = pytest.mark.skipif(not AUDIO.exists(), reason="no fixture audio: run `make fixtures`")
 
 UTTERANCE = "Hi, I need to speak to someone about my landlord."
+FLUSH_TIMEOUT_S = 0.4
+"""What the CUDA engine waits for a realtime server's final answer in these tests, under
+WhisperStt.flush_timeout_s so the service answers a flush before the client gives up on it."""
 
 
 class StubTranscriber:
@@ -61,7 +69,8 @@ class StubSession:
 
 
 class StubStreamingTranscriber:
-    engine, model = VoxtralTranscriber.engine, VoxtralTranscriber.model
+    engine, backend = VoxtralTranscriber.engine, VoxtralTranscriber.backend
+    model = VoxtralTranscriber.model
     speech_floor_dbfs = VoxtralTranscriber.speech_floor_dbfs
 
     def __init__(self) -> None:
@@ -92,10 +101,28 @@ async def voxtral() -> AsyncIterator[SttPort]:
         yield WhisperStt(f"ws://{host}/v1/stream")
 
 
+@asynccontextmanager
+async def realtime_service(server: FakeVllmRealtime) -> AsyncIterator[SttPort]:
+    """The STT service running its CUDA engine, whose model is a vLLM server away."""
+    async with run_asgi(server.app()) as vllm:
+        transcriber = VllmVoxtralTranscriber(
+            url=f"ws://{vllm}/v1/realtime", flush_timeout_s=FLUSH_TIMEOUT_S
+        )
+        async with run_asgi(create_app(lambda: transcriber, interim_interval_s=0.0)) as host:
+            yield WhisperStt(f"ws://{host}/v1/stream")
+
+
+@asynccontextmanager
+async def voxtral_vllm() -> AsyncIterator[SttPort]:
+    async with realtime_service(FakeVllmRealtime(text=UTTERANCE)) as stt:
+        yield stt
+
+
 IMPLEMENTATIONS: dict[str, Callable[[], AbstractAsyncContextManager[SttPort]]] = {
     "deepgram": deepgram,
     "whisper": whisper,
     "voxtral": voxtral,
+    "voxtral-vllm": voxtral_vllm,
 }
 
 
@@ -357,8 +384,86 @@ async def test_the_service_reports_the_streaming_engine_it_loaded() -> None:
     assert info["engines"] == [{"id": "voxtral", "model": VoxtralTranscriber.model}]
 
 
+async def test_the_cuda_engine_is_reported_as_voxtral_by_the_runtime_that_served_it() -> None:
+    """The engine is the same one the Apple Silicon backend runs, so /transparency names
+    the same catalogue entry; the model says which runtime produced the numbers, which the
+    catalogue's version -- fixed configuration -- cannot."""
+    async with run_asgi(FakeVllmRealtime(text=UTTERANCE).app()) as vllm:
+        transcriber = VllmVoxtralTranscriber(
+            url=f"ws://{vllm}/v1/realtime",
+            model="mistralai/Voxtral-Mini-4B-Realtime-2602",
+            flush_timeout_s=FLUSH_TIMEOUT_S,
+        )
+        async with (
+            run_asgi(create_app(lambda: transcriber)) as host,
+            httpx.AsyncClient(base_url=f"http://{host}") as client,
+        ):
+            info = (await client.get("/v1/info")).json()
+
+    assert info["engines"] == [
+        {"id": "voxtral", "model": "mistralai/Voxtral-Mini-4B-Realtime-2602 (vLLM realtime)"}
+    ]
+
+
+async def test_the_cuda_engine_sends_the_realtime_server_the_model_and_the_callers_audio() -> None:
+    """The wire format is vLLM's: the model is named before any commit, and the audio is
+    base64 PCM16 at 16 kHz, so what the server decodes is what the caller said."""
+    server = FakeVllmRealtime(text=UTTERANCE)
+    pcm, _ = read_wav(AUDIO)
+
+    async with realtime_service(server) as stt:
+        sent = server.audio_bytes
+        await collect(stt.stream(speech_then(FlushSignal()), "en"))
+
+    assert server.models == [VllmVoxtralTranscriber().served_model] * 2  # warm-up, then the call
+    assert server.audio_bytes - sent == len(pcm)
+    assert server.generations == 2
+
+
+async def test_a_realtime_server_that_answers_nothing_still_answers_the_flush_once() -> None:
+    """A realtime server has no equivalent of an empty transcript: it simply says nothing
+    until it has something. The caller is still owed exactly one answer to the flush."""
+    async with realtime_service(FakeVllmRealtime(silent=True)) as stt:
+        stt.flush_timeout_s = 5.0  # the service's own answer, not the client's fallback
+        events = await asyncio.wait_for(collect(stt.stream(speech_then(FlushSignal()), "en")), 10)
+
+    assert [(e.text, e.flushed) for e in events] == [("", True)]
+
+
+async def test_a_realtime_server_that_fails_mid_utterance_does_not_answer_the_flush() -> None:
+    """A server that dies mid-utterance has transcribed only part of what was said, and a
+    final carrying that part is indistinguishable from a caller who stopped there."""
+    events: list[TranscriptEvent] = []
+    async with realtime_service(FakeVllmRealtime(text=UTTERANCE, fail_after_chunks=2)) as stt:
+        stt.flush_timeout_s = 5.0
+        with pytest.raises(Exception, match="close frame"):  # the service broke the socket
+            async for event in stt.stream(speech_then(FlushSignal()), "en"):
+                events.append(event)
+
+    assert [e for e in events if e.flushed or e.is_final] == []
+
+
+def test_a_realtime_server_that_is_not_there_fails_the_utterance_rather_than_emptying_it() -> None:
+    """The service's warm-up runs this path, so a GPU node whose vLLM server is missing
+    refuses to start instead of answering every flush with silence."""
+    with socket.socket() as taken:
+        taken.bind(("127.0.0.1", 0))
+        unused_port = taken.getsockname()[1]
+
+    session = VllmVoxtralTranscriber(url=f"ws://127.0.0.1:{unused_port}/v1/realtime").session()
+    session.feed(to_samples(WARMUP_PCM))
+    with pytest.raises(OSError):
+        session.finish()
+
+
 @pytest.mark.parametrize(
-    ("setting", "engine"), [(None, "faster-whisper"), ("mlx", "mlx"), ("voxtral", "voxtral")]
+    ("setting", "engine"),
+    [
+        (None, "faster-whisper"),
+        ("mlx", "mlx"),
+        ("voxtral", "voxtral"),
+        ("voxtral-vllm", "voxtral"),
+    ],
 )
 def test_the_environment_says_which_engine_the_service_loads(
     monkeypatch: pytest.MonkeyPatch, setting: str | None, engine: str
@@ -366,7 +471,8 @@ def test_the_environment_says_which_engine_the_service_loads(
     monkeypatch.delenv("WHISPER_BACKEND", raising=False)
     if setting is not None:
         monkeypatch.setenv("WHISPER_BACKEND", setting)
-    assert selected_transcriber().engine == engine
+    chosen = selected_transcriber()
+    assert (chosen.backend, chosen.engine) == (setting or "faster-whisper", engine)
 
 
 def test_an_engine_this_service_cannot_run_is_refused_at_startup(

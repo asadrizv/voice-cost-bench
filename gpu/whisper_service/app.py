@@ -18,6 +18,7 @@ included, and one engine's shape never reaches the socket.
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import json
 import logging
@@ -32,6 +33,7 @@ import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, PlainTextResponse
 from prometheus_client import CollectorRegistry, Gauge, Histogram, generate_latest
+from websockets.sync.client import ClientConnection, connect
 
 if TYPE_CHECKING:
     from mlx_audio.stt.streaming import StreamingSession
@@ -69,12 +71,19 @@ def to_samples(pcm: bytes) -> np.ndarray:
     return np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
 
 
+def to_pcm16(audio: np.ndarray) -> bytes:
+    return (np.clip(audio, -1.0, 1.0) * 32767).astype("<i2").tobytes()
+
+
 def carries_speech(samples: np.ndarray, floor_dbfs: float) -> bool:
     rms = float(np.sqrt(np.mean(samples * samples))) if samples.size else 0.0
     return 20 * np.log10(max(rms, 1e-6)) >= floor_dbfs
 
 
 class Transcriber(Protocol):
+    backend: str
+    """The id WHISPER_BACKEND names to load this one. It is the engine id where the engine
+    has a single runtime here, and `<engine>-<runtime>` where it has more than one."""
     engine: str
     """The engine's id in config/components.yaml, where /transparency names it from."""
     model: str
@@ -83,7 +92,7 @@ class Transcriber(Protocol):
 
 
 class FasterWhisperTranscriber:
-    engine = "faster-whisper"
+    engine = backend = "faster-whisper"
     model = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
 
     def __init__(self) -> None:
@@ -111,7 +120,7 @@ class MlxWhisperTranscriber:
     """Apple Silicon: same Whisper weights on the Mac's GPU via MLX. For the local demo;
     its latency says nothing about the L40S benchmark."""
 
-    engine = "mlx"
+    engine = backend = "mlx"
     model = os.environ.get("WHISPER_MLX_REPO", "mlx-community/whisper-large-v3-turbo")
 
     def __init__(self) -> None:
@@ -148,6 +157,7 @@ class TranscriptionSession(Protocol):
 
 @runtime_checkable
 class StreamingTranscriber(Protocol):
+    backend: str
     engine: str
     model: str
     speech_floor_dbfs: float
@@ -171,7 +181,7 @@ class VoxtralTranscriber:
     streams it without CUDA (the vLLM realtime backend is #32). It identifies the spoken
     language itself, so the socket's `language` is not passed on."""
 
-    engine = "voxtral"
+    engine = backend = "voxtral"
     model = os.environ.get("VOXTRAL_MLX_REPO", "mlx-community/Voxtral-Mini-4B-Realtime-2602-4bit")
 
     speech_floor_dbfs = -60.0
@@ -230,23 +240,166 @@ class VoxtralSession:
         return self._text.strip()
 
 
+VLLM_OPEN_TIMEOUT_S = 10.0
+VLLM_FLUSH_TIMEOUT_S = float(os.environ.get("VOXTRAL_VLLM_FLUSH_TIMEOUT_S", "3.0"))
+"""How long a flush waits for the realtime server's transcription.done before answering
+with the deltas it has. Without it a server that goes quiet would hold the caller's turn
+open until the client's own flush timeout; with it the caller is always answered."""
+
+
+class VllmVoxtralTranscriber:
+    """CUDA: the same Voxtral realtime weights, served by a vLLM process on the GPU and
+    reached over its realtime WebSocket, so nothing here imports CUDA or holds the card.
+    vLLM needs >= 16 GiB for it and mistral_common >= 1.9; see gpu/README.md.
+
+    The reported model names the runtime as well as the weights: which runtime served a
+    benchmark run is not otherwise recoverable from provenance, since the catalogue's
+    version is fixed configuration and the two runtimes share an engine id."""
+
+    engine = "voxtral"
+    backend = "voxtral-vllm"
+    speech_floor_dbfs = VoxtralTranscriber.speech_floor_dbfs
+    """The gate measured on the 4-bit MLX quantisation, reused unmeasured for bf16 on CUDA.
+    It sits under the quietest speech that quantisation was measured to read, so it errs
+    towards spending the GPU rather than dropping a quiet caller."""
+
+    def __init__(
+        self,
+        url: str | None = None,
+        model: str | None = None,
+        flush_timeout_s: float = VLLM_FLUSH_TIMEOUT_S,
+    ) -> None:
+        self.served_model = model or os.environ.get(
+            "VOXTRAL_VLLM_MODEL", "mistralai/Voxtral-Mini-4B-Realtime-2602"
+        )
+        self.model = f"{self.served_model} (vLLM realtime)"
+        self._url = url or os.environ.get("VOXTRAL_VLLM_URL", "ws://127.0.0.1:8003/v1/realtime")
+        self._flush_timeout_s = flush_timeout_s
+
+    def session(self) -> TranscriptionSession:
+        return VllmRealtimeSession(self._url, self.served_model, self._flush_timeout_s)
+
+
+class VllmRealtimeSession:
+    """One utterance on one connection to vLLM's realtime endpoint, whose protocol is:
+    session.created on connect, session.update names the model, a commit starts a
+    generation, input_audio_buffer.append carries base64 PCM16 at 16 kHz, transcription
+    .delta streams the text, and a commit with final=true ends the generation with
+    transcription.done.
+    https://github.com/vllm-project/vllm/blob/main/docs/serving/online_serving/speech_to_text.md
+
+    `feed` runs on the event loop, so it only buffers; the socket is opened, written and
+    read on the service's model thread in `advance` and `finish`. A failed utterance is
+    remembered: a flush must not answer with the text from before the server broke, which
+    the caller cannot tell from a caller who stopped speaking there."""
+
+    def __init__(self, url: str, model: str, flush_timeout_s: float) -> None:
+        self._url = url
+        self._model = model
+        self._flush_timeout_s = flush_timeout_s
+        self._pending: list[bytes] = []
+        self._text = ""
+        self._ws: ClientConnection | None = None
+        self._open = contextlib.ExitStack()
+        self._failure: Exception | None = None
+
+    def feed(self, audio: np.ndarray) -> None:
+        self._pending.append(to_pcm16(audio))
+
+    def advance(self) -> str:
+        self._run(lambda: self._drain_until(time.monotonic()))
+        return self._text.strip()
+
+    def finish(self) -> str:
+        try:
+            self._run(self._commit)
+        finally:
+            self._close()
+        return self._text.strip()
+
+    def _commit(self) -> None:
+        self._send({"type": "input_audio_buffer.commit", "final": True})
+        self._drain_until(time.monotonic() + self._flush_timeout_s)
+
+    def _run(self, step: Callable[[], None]) -> None:
+        if self._failure is not None:
+            raise self._failure
+        try:
+            self._send_audio()
+            step()
+        except Exception as exc:
+            self._failure = exc
+            self._close()
+            raise
+
+    def _connection(self) -> ClientConnection:
+        if self._ws is None:
+            ws = self._open.enter_context(connect(self._url, open_timeout=VLLM_OPEN_TIMEOUT_S))
+            self._ws = ws
+            greeting = json.loads(ws.recv(timeout=VLLM_OPEN_TIMEOUT_S))
+            if greeting.get("type") != "session.created":
+                raise RuntimeError(f"vLLM realtime greeted with {greeting}")
+            # The server refuses a commit until a session.update has named a model it
+            # serves, which is also what tells a mismatched deployment from a silent one.
+            self._send({"type": "session.update", "model": self._model})
+            self._send({"type": "input_audio_buffer.commit"})
+        return self._ws
+
+    def _send(self, event: dict[str, object]) -> None:
+        self._connection().send(json.dumps(event))
+
+    def _send_audio(self) -> None:
+        pending, self._pending = self._pending, []
+        for pcm in pending:
+            self._send(
+                {
+                    "type": "input_audio_buffer.append",
+                    "audio": base64.b64encode(pcm).decode(),
+                }
+            )
+
+    def _drain_until(self, deadline: float) -> None:
+        ws = self._connection()
+        while True:
+            try:
+                message = ws.recv(timeout=max(deadline - time.monotonic(), 0.0))
+            except TimeoutError:
+                return
+            event = json.loads(message)
+            kind = event.get("type")
+            if kind == "transcription.delta":
+                self._text += str(event.get("delta", ""))
+            elif kind == "transcription.done":
+                self._text = str(event.get("text", self._text))
+                return
+            elif kind == "error":
+                raise RuntimeError(f"vLLM realtime: {event.get('error')}")
+
+    def _close(self) -> None:
+        self._ws = None
+        with contextlib.suppress(Exception):
+            self._open.close()
+
+
 TRANSCRIBERS: tuple[type[Transcriber] | type[StreamingTranscriber], ...] = (
     FasterWhisperTranscriber,
     MlxWhisperTranscriber,
     VoxtralTranscriber,
+    VllmVoxtralTranscriber,
 )
-"""Every engine this service can run; the API's catalogue must name each one."""
+"""Every backend this service can run; the API's catalogue must name each engine behind
+them. Two backends may share an engine id, one runtime each."""
 
 
 def selected_transcriber() -> type[Transcriber] | type[StreamingTranscriber]:
-    """The engine WHISPER_BACKEND names, refused here rather than quietly replaced: a typo
+    """The backend WHISPER_BACKEND names, refused here rather than quietly replaced: a typo
     would otherwise put a different engine behind a benchmark run and its provenance."""
-    backend = os.environ.get("WHISPER_BACKEND", FasterWhisperTranscriber.engine)
-    chosen = next((t for t in TRANSCRIBERS if t.engine == backend), None)
+    backend = os.environ.get("WHISPER_BACKEND", FasterWhisperTranscriber.backend)
+    chosen = next((t for t in TRANSCRIBERS if t.backend == backend), None)
     if chosen is None:
         raise RuntimeError(
             f"WHISPER_BACKEND names {backend!r}; this service runs "
-            f"{sorted(t.engine for t in TRANSCRIBERS)}"
+            f"{sorted(t.backend for t in TRANSCRIBERS)}"
         )
     return chosen
 
@@ -402,11 +555,13 @@ def create_app(
         threads = 1 if isinstance(transcriber, StreamingTranscriber) else workers
         state["pool"] = ThreadPoolExecutor(max_workers=threads)
         state["slots"] = asyncio.Semaphore(threads)
-        # Warm load: the first real call must not pay for kernel compilation.
+        # Warm load: the first real call must not pay for kernel compilation. It runs on
+        # the pool, like a call's work does, so an engine whose model answers over a socket
+        # is not waiting on an event loop this is blocking.
         warm = new_turn("en")
         warm.add(WARMUP_PCM)
         if (work := warm.final()) is not None:
-            work()
+            await asyncio.get_running_loop().run_in_executor(state["pool"], work)  # type: ignore[arg-type]
         yield
         state["pool"].shutdown(wait=False)  # type: ignore[attr-defined]
 

@@ -442,8 +442,14 @@ async def test_a_hung_service_leaves_its_default_unconfirmed_within_seconds() ->
 
 
 def test_startup_checks_the_catalogue_for_every_engine_the_services_can_run() -> None:
-    assert [t.engine for t in TRANSCRIBERS] == list(SELFHOSTED_ENGINES[ComponentKind.STT])
-    assert [s.engine for s in SYNTHESIZERS] == list(SELFHOSTED_ENGINES[ComponentKind.TTS])
+    """A backend is a runtime, an engine is what a call is served by and what the catalogue
+    names, so the two CUDA backends add runtimes to engines already listed, not engines."""
+    assert list(dict.fromkeys(t.engine for t in TRANSCRIBERS)) == list(
+        SELFHOSTED_ENGINES[ComponentKind.STT]
+    )
+    assert list(dict.fromkeys(s.engine for s in SYNTHESIZERS)) == list(
+        SELFHOSTED_ENGINES[ComponentKind.TTS]
+    )
     assert SELFHOSTED_ENGINES[ComponentKind.STT][0] == FasterWhisperTranscriber.engine
 
 
