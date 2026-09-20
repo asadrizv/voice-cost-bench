@@ -17,7 +17,10 @@ from backend.application.ports.pipeline_provider import Pipeline
 from backend.application.use_cases.handle_call_turn import TurnRequest
 from backend.domain.entities.latency import TurnTimeline
 from backend.domain.value_objects.pipeline_kind import PipelineKind
-from backend.infrastructure.config.component_catalogue import ComponentCatalogueError
+from backend.infrastructure.config.component_catalogue import (
+    ComponentCatalogueError,
+    NotEuResident,
+)
 from backend.infrastructure.config.settings import Settings
 from backend.infrastructure.pipeline_factory import SELFHOSTED_ENGINES
 from backend.interfaces.container import validate_static_config
@@ -587,3 +590,126 @@ def test_a_selected_carrier_without_a_catalogue_entry_fails_startup(tmp_path: Pa
 
     with pytest.raises(ComponentCatalogueError, match="'telnyx'"):
         create_app(settings, pipelines=StaticPipelines({}))
+
+
+GPU_HOST_IN_THE_EU = """  gpu_host:
+    region: "gpu-host (see deployment)"
+    leaves_eu: false"""
+VOXTRAL_ON_ITS_VENDORS_CLOUD = """    host: gpu_host
+    licence: Apache-2.0
+    gpu_memory:
+      gib: 9.98"""
+
+
+def eu_config(tmp_path: Path, carrier: str = "sipgate", edit: tuple[str, str] | None = None) -> Path:
+    """The shipped configuration with the German carrier selected: everything the selfhosted
+    pipeline touches is then EU-resident, so each edit isolates one component that isn't.
+    sipgate sells inbound by the month, so an operator enters their contracted per-minute
+    rate before they can select it; this stands in for that."""
+    config = config_copy(tmp_path)
+    rates = config / "rates.yaml"
+    rates.write_text(
+        rates.read_text().replace(
+            "    sipgate:\n      unit: minute\n",
+            "    sipgate:\n      unit: minute\n      price_usd: 0.006\n",
+            1,
+        )
+    )
+    select_carrier(config, carrier)
+    if edit is not None:
+        catalogue = config / "components.yaml"
+        text = catalogue.read_text()
+        assert edit[0] in text
+        catalogue.write_text(text.replace(edit[0], edit[1], 1))
+    return config
+
+
+def eu_settings(config: Path, **update: object) -> Settings:
+    return SETTINGS.model_copy(
+        update={
+            "config_dir": config,
+            "eu_only": True,
+            "pipeline": PipelineKind.SELFHOSTED,
+            "livekit_url": "ws://localhost:7880",
+            **update,
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("update", "carrier", "edit", "named"),
+    [
+        (
+            {"pipeline": PipelineKind.API},
+            "twilio",
+            None,
+            [
+                "api telephony 'twilio' (Twilio, us)",
+                "api stt 'deepgram' (Deepgram, us)",
+                "api llm 'openai' (OpenAI, us)",
+                "api tts 'elevenlabs' (ElevenLabs, us)",
+            ],
+        ),
+        ({}, "twilio", None, ["selfhosted telephony 'twilio' (Twilio, us)"]),
+        (
+            {},
+            "telnyx",
+            None,
+            ["selfhosted telephony 'telnyx' (Telnyx, global (nearest point of presence))"],
+        ),
+        (
+            {"livekit_url": "wss://example.livekit.cloud"},
+            "sipgate",
+            None,
+            ["selfhosted orchestration 'livekit-cloud' (LiveKit Cloud, global (nearest edge))"],
+        ),
+        (
+            {},
+            "sipgate",
+            (GPU_HOST_IN_THE_EU, GPU_HOST_IN_THE_EU.replace("false", "true")),
+            [
+                "selfhosted stt 'faster-whisper'",
+                "selfhosted llm 'vllm:Qwen/Qwen3.5-9B'",
+                "selfhosted tts 'kokoro'",
+                "selfhosted stt engine 'mlx'",
+                "selfhosted stt engine 'voxtral'",
+                "selfhosted tts engine 'qwen3-tts'",
+            ],
+        ),
+        (
+            {},
+            "sipgate",
+            (
+                VOXTRAL_ON_ITS_VENDORS_CLOUD,
+                VOXTRAL_ON_ITS_VENDORS_CLOUD.replace(
+                    "host: gpu_host", "region: us\n    leaves_eu: true"
+                ),
+            ),
+            ["selfhosted stt engine 'voxtral' (Mistral AI Voxtral, us)"],
+        ),
+    ],
+)
+def test_the_eu_only_profile_refuses_to_start_naming_every_component_that_leaves_the_eu(
+    tmp_path: Path,
+    update: dict[str, object],
+    carrier: str,
+    edit: tuple[str, str] | None,
+    named: list[str],
+) -> None:
+    settings = eu_settings(eu_config(tmp_path, carrier, edit), **update)
+
+    for start in (validate_static_config, lambda s: create_app(s, pipelines=StaticPipelines({}))):
+        with pytest.raises(NotEuResident) as raised:
+            start(settings)
+        message = str(raised.value)
+        for component in named:
+            assert component in message
+        assert message.endswith("Select EU-resident components or unset EU_ONLY.")
+
+
+def test_a_deployment_without_the_profile_may_leave_the_eu(tmp_path: Path) -> None:
+    """The profile is opt-in: the shipped configuration keeps working untouched."""
+    settings = SETTINGS.model_copy(update={"config_dir": config_copy(tmp_path)})
+
+    validate_static_config(settings)
+    create_app(settings, pipelines=StaticPipelines({}))

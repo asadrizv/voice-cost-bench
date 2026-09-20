@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     pipeline: PipelineKind = PipelineKind.API
     persona: str = "law_firm"
     endpointer: EndpointerKind = EndpointerKind.SEMANTIC
+    eu_only: bool = False
+    """EU-only deployment profile: startup fails unless every catalogue component a call
+    could touch is EU-resident, and no call may run on a pipeline other than the one
+    above."""
 
     livekit_url: str = "ws://localhost:7880"
     livekit_public_url: str = ""
@@ -64,6 +68,13 @@ class Settings(BaseSettings):
     serving_config: str = "qwen-9b-l40s.yaml"
     """A file name in config/serving/: the meaning gpu/docker-compose.gpu.yml and
     gpu/runpod/start.sh give SERVING_CONFIG when they start vLLM from it."""
+
+    @property
+    def selectable_pipelines(self) -> tuple[PipelineKind, ...]:
+        """The pipelines a call may run on, which the browser and the harness choose from
+        per call. Under EU_ONLY only the configured one, so a per-call choice cannot reach
+        components the profile refused to start with."""
+        return (self.pipeline,) if self.eu_only else tuple(PipelineKind)
 
     @property
     def rates_path(self) -> Path:

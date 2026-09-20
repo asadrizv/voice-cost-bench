@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -11,6 +11,7 @@ import yaml
 from backend.application.ports.component_catalogue import (
     Component,
     ComponentKind,
+    EngineCatalogue,
     GpuMemoryProfile,
 )
 from backend.domain.services.gpu_memory_budget import BASES, GpuCapacity, MemoryClaim
@@ -18,6 +19,10 @@ from backend.domain.value_objects.pipeline_kind import PipelineKind
 
 
 class ComponentCatalogueError(ValueError):
+    pass
+
+
+class NotEuResident(RuntimeError):
     pass
 
 
@@ -73,6 +78,37 @@ class YamlComponentCatalogue:
 
     def engine(self, kind: ComponentKind, engine_id: str) -> Component | None:
         return self._engines.get((kind, engine_id))
+
+
+def require_eu_residency(
+    catalogue: EngineCatalogue, pipelines: Iterable[PipelineKind], engines: Engines
+) -> None:
+    """The EU-only profile's gate: raises NotEuResident naming every component a call on
+    those pipelines could touch that is not EU-resident. A self-hosted service picks its
+    own engine, so every engine it can run counts, not only the catalogue's default."""
+    offenders: dict[str, str] = {}
+    for pipeline in pipelines:
+        for component in catalogue.components(pipeline):
+            if component.leaves_eu:
+                offenders[component.id] = _named(
+                    f"{pipeline.value} {component.kind.value}", component
+                )
+        if pipeline is not PipelineKind.SELFHOSTED:
+            continue
+        for kind, ids in engines.items():
+            for engine_id in ids:
+                entry = catalogue.engine(kind, engine_id)
+                if entry is not None and entry.leaves_eu and entry.id not in offenders:
+                    offenders[entry.id] = _named(f"{pipeline.value} {kind.value} engine", entry)
+    if offenders:
+        raise NotEuResident(
+            f"EU_ONLY is set, but these components leave the EU: {', '.join(offenders.values())}. "
+            "Select EU-resident components or unset EU_ONLY."
+        )
+
+
+def _named(where: str, component: Component) -> str:
+    return f"{where} {component.id!r} ({component.vendor}, {component.region})"
 
 
 def _resolve(

@@ -31,7 +31,10 @@ from backend.application.use_cases.start_call import StartCall
 from backend.domain.services.cost_calculator import CostCalculator
 from backend.domain.services.gpu_memory_budget import BudgetVerdict
 from backend.domain.value_objects.pipeline_kind import PipelineKind
-from backend.infrastructure.config.component_catalogue import YamlComponentCatalogue
+from backend.infrastructure.config.component_catalogue import (
+    YamlComponentCatalogue,
+    require_eu_residency,
+)
 from backend.infrastructure.config.personas import YamlPersonaProvider
 from backend.infrastructure.config.settings import Settings
 from backend.infrastructure.persistence.inmemory_call_repository import InMemoryCallRepository
@@ -146,12 +149,16 @@ def warn_over_budget(check: CheckGpuBudget, components: Iterable[Component]) -> 
 
 def build_catalogue(settings: Settings, rates: YamlRateCardProvider) -> YamlComponentCatalogue:
     """Raises ComponentCatalogueError when a configured component, or an engine a self-hosted
-    service can run, has no complete entry."""
-    return YamlComponentCatalogue(
+    service can run, has no complete entry, and NotEuResident when EU_ONLY is set and one of
+    them is not EU-resident."""
+    catalogue = YamlComponentCatalogue(
         settings.components_path,
         configured_components(settings, rates.telephony_provider()),
         SELFHOSTED_ENGINES,
     )
+    if settings.eu_only:
+        require_eu_residency(catalogue, settings.selectable_pipelines, SELFHOSTED_ENGINES)
+    return catalogue
 
 
 def build_repository(settings: Settings) -> CallRepository:
