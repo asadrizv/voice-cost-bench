@@ -168,7 +168,7 @@ Something has to give, and the choice belongs to whoever runs the benchmark:
 - **Serve speech from a second card**, and say so beside any cost number: the L40S hour in
   `config/rates.yaml` prices one card.
 - **Run one CUDA speech engine, not both.** Voxtral with Kokoro's English voices leaves
-  the LLM about 0.5 of the card; Qwen3-TTS German with Whisper leaves it about 0.3.
+  the LLM about 0.6 of the card; Qwen3-TTS German with Whisper leaves it about 0.3.
 
 This is the same wall #30's budget already hit for the Apple Silicon numbers: Qwen3-TTS
 (5.48 GiB) beside Voxtral (9.98 GiB) and the LLM's 0.72 share come to 50.02 GiB, 2.02 GiB
