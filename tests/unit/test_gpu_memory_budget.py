@@ -37,14 +37,17 @@ from backend.interfaces.container import (
 GPU = "L40S"
 
 
-def config_with(tmp_path: Path, utilisation: str, **figures: dict[str, Any]) -> Path:
+def config_with(tmp_path: Path, utilisation: str | None, **figures: dict[str, Any]) -> Path:
     """The shipped configuration with the LLM's memory share, and any named component's
-    memory figure, replaced."""
+    memory figure, replaced. A share of None is removed from the serving config."""
     config = tmp_path / "config"
     shutil.copytree(REPO_ROOT / "config", config)
     serving = config / "serving" / "qwen-9b-l40s.yaml"
     served = yaml.safe_load(serving.read_text())
-    served["gpu-memory-utilization"] = float(utilisation)
+    if utilisation is None:
+        del served["gpu-memory-utilization"]
+    else:
+        served["gpu-memory-utilization"] = float(utilisation)
     serving.write_text(yaml.safe_dump(served))
     components = config / "components.yaml"
     raw = yaml.safe_load(components.read_text())
@@ -238,7 +241,7 @@ def test_an_engine_that_never_runs_on_the_gpu_has_no_figure_to_read() -> None:
     profile = catalogue.gpu_memory()
 
     assert profile is not None
-    assert profile.claims["mlx"].gib is None
+    assert profile.claims["mlx"] == MemoryClaim("mlx", None, "", "")
 
 
 def test_the_default_engines_fit_one_l40s_beside_the_configured_llm() -> None:
@@ -275,13 +278,56 @@ def test_the_serving_configs_memory_share_decides_the_shipped_verdict(tmp_path: 
     assert budget.verdict is BudgetVerdict.FITS
 
 
-def test_a_memory_figure_without_a_stated_basis_fails_at_startup(tmp_path: Path) -> None:
-    settings = Settings(
-        database_url="", config_dir=config_with(tmp_path, "0.72", kokoro={"gib": 1.0})
-    )
+@pytest.mark.parametrize(
+    ("figure", "message"),
+    [
+        ({"gib": 1.0, "source": "recon"}, "kokoro gpu_memory: needs basis"),
+        (
+            {"gib": 1.0, "basis": "a hunch", "source": "recon"},
+            "kokoro gpu_memory: basis must be one of measured, vendor-stated, estimated",
+        ),
+        (
+            {"gib": 0, "basis": "measured", "source": "recon"},
+            "kokoro gpu_memory: gib must be positive, not 0",
+        ),
+        ({"basis": "measured", "source": "recon"}, "kokoro gpu_memory: needs gib in GiB"),
+        ({"gib": 1.0, "basis": "measured"}, "kokoro gpu_memory: needs source"),
+    ],
+)
+def test_a_memory_figure_that_states_nothing_usable_fails_at_startup(
+    tmp_path: Path, figure: dict[str, Any], message: str
+) -> None:
+    """A zero is the dangerous one: it would quietly hand the card away for free."""
+    settings = Settings(database_url="", config_dir=config_with(tmp_path, "0.72", kokoro=figure))
 
-    with pytest.raises(ComponentCatalogueError, match="kokoro.*basis"):
+    with pytest.raises(ComponentCatalogueError) as raised:
         build_catalogue(settings, YamlRateCardProvider(settings.rates_path))
+
+    assert str(raised.value) == message
+
+
+@pytest.mark.parametrize(
+    ("field", "message"),
+    [
+        ("sku", "needs sku"),
+        ("total_gib", "needs total_gib in GiB"),
+        ("basis", "needs basis"),
+        ("source", "needs source"),
+    ],
+)
+def test_a_gpu_described_incompletely_fails_at_startup(
+    tmp_path: Path, field: str, message: str
+) -> None:
+    config = config_with(tmp_path, "0.72")
+    raw = yaml.safe_load((config / "components.yaml").read_text())
+    del raw["hosts"]["gpu_host"]["gpu"][field]
+    (config / "components.yaml").write_text(yaml.safe_dump(raw))
+    settings = Settings(database_url="", config_dir=config)
+
+    with pytest.raises(ComponentCatalogueError) as raised:
+        build_catalogue(settings, YamlRateCardProvider(settings.rates_path))
+
+    assert str(raised.value) == f"host 'gpu_host' gpu: {message}"
 
 
 def without_the_gpu(config: Path, **hosts: Any) -> Path:
@@ -326,8 +372,8 @@ def test_startup_warns_when_the_configured_engines_overrun_the_card(
         validate_static_config(settings)
 
     [warning] = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert "GPU memory budget" in warning.getMessage()
-    assert "1.60 GiB short (does not fit)" in warning.getMessage()
+    assert warning.getMessage().startswith("GPU memory budget: L40S 48.00 GiB:")
+    assert warning.getMessage().endswith("1.60 GiB short (does not fit)")
 
 
 def test_startup_says_nothing_when_the_configured_engines_fit(
@@ -340,3 +386,48 @@ def test_startup_says_nothing_when_the_configured_engines_fit(
         validate_static_config(settings)
 
     assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
+
+
+def test_the_summary_names_every_unknown_engine_and_rounds_no_shortfall_away() -> None:
+    tight = check(voxtral="9.00", kokoro="4.50").execute(selection("voxtral", "kokoro"))
+    unsure = check(whisper="3.0", mlx=None, chatterbox=None).execute(
+        selection("whisper", "mlx", "chatterbox")
+    )
+
+    assert tight is not None and unsure is not None
+    assert tight.summary().endswith("48.06 GiB, 0.06 GiB short (does not fit)")
+    assert unsure.summary().endswith("(unknown: no figure for mlx, chatterbox)")
+
+
+def llm_claim(settings: Settings) -> MemoryClaim:
+    catalogue = build_catalogue(settings, YamlRateCardProvider(settings.rates_path))
+    budget = build_gpu_budget_check(settings, catalogue).execute(
+        catalogue.components(PipelineKind.SELFHOSTED)
+    )
+    assert budget is not None and budget.verdict is BudgetVerdict.UNKNOWN
+    [claim] = [c for c in budget.claims if c.gib is None]
+    return claim
+
+
+def test_an_ollama_run_cannot_settle_the_budget(tmp_path: Path) -> None:
+    """Ollama loads and unloads on demand, so no share of the card is set aside for it."""
+    claim = llm_claim(
+        Settings(
+            database_url="",
+            llm_server="ollama",
+            vllm_model="qwen3.5:9b",
+            config_dir=config_with(tmp_path, "0.72"),
+        )
+    )
+
+    assert claim.component_id == "ollama:qwen3.5:9b"
+    assert claim.source == "ollama reserves no fixed share of the card"
+
+
+def test_a_serving_config_that_sets_no_memory_share_cannot_settle_the_budget(
+    tmp_path: Path,
+) -> None:
+    claim = llm_claim(Settings(database_url="", config_dir=config_with(tmp_path, None)))
+
+    assert claim.component_id == "vllm:Qwen/Qwen3.5-9B"
+    assert claim.source == "no gpu-memory-utilization in qwen-9b-l40s.yaml"

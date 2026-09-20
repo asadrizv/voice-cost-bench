@@ -546,6 +546,7 @@ def test_provenance_records_whether_the_engines_that_ran_fit_the_card() -> None:
         if c.kind is ComponentKind.LLM
     ] + [
         DescribedComponent(catalogue.engine(ComponentKind.STT, "voxtral"), ""),  # type: ignore[arg-type]
+        DescribedComponent(catalogue.engine(ComponentKind.STT, "mlx"), ""),  # type: ignore[arg-type]
         DescribedComponent(catalogue.engine(ComponentKind.TTS, "qwen3-tts"), ""),  # type: ignore[arg-type]
     ]
     check = build_gpu_budget_check(settings, catalogue)
@@ -569,15 +570,21 @@ def test_provenance_records_whether_the_engines_that_ran_fit_the_card() -> None:
         "basis": "vendor-stated",
         "source": catalogue.gpu_memory().gpu.source,  # type: ignore[union-attr]
     }
-    assert budget["verdict"] == "does not fit"
+    assert budget["claimed_gib"] == 50.02
+    assert budget["headroom_gib"] == -2.02
     assert budget["shortfall_gib"] == 2.02
+    assert budget["verdict"] == "does not fit"
+    assert budget["unknown"] == ["mlx"]
     assert budget["measured"] is False
     figures = {c["component"]: c for c in budget["components"]}
-    assert set(figures) == {"vllm:Qwen/Qwen3.5-9B", "voxtral", "qwen3-tts"}
+    assert set(figures) == {"vllm:Qwen/Qwen3.5-9B", "voxtral", "mlx", "qwen3-tts"}
     assert figures["voxtral"]["gib"] == 9.98
     assert "4-bit MLX checkpoint" in figures["voxtral"]["source"]
     assert figures["qwen3-tts"]["basis"] == "estimated"
+    assert figures["mlx"]["gib"] is None
     assert figures["vllm:Qwen/Qwen3.5-9B"]["gib"] == 34.56
+    # A share of the card is only as well founded as the card's own total.
+    assert figures["vllm:Qwen/Qwen3.5-9B"]["basis"] == "vendor-stated"
     assert figures["vllm:Qwen/Qwen3.5-9B"]["source"] == (
         "gpu-memory-utilization: 0.72 in qwen-9b-l40s.yaml"
     )
