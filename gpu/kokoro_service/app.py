@@ -410,9 +410,13 @@ def create_app(
     @app.get("/health/deep")
     async def deep() -> JSONResponse:
         started = time.perf_counter()
+        # The default engine's own warm-up voice, not the request default: a service that
+        # loads Qwen3-TTS alone speaks no `af_heart`, and start.sh waits on this endpoint
+        # without a timeout, so a probe that can never pass never finishes a deployment.
+        voice = next(iter(synthesizers.values())).warmup_voice
         try:
             total = 0
-            async for chunk in segments(SynthesizeRequest(text="Hello.")):
+            async for chunk in segments(SynthesizeRequest(text="Hello.", voice=voice)):
                 total += len(chunk)
             if total == 0:
                 raise RuntimeError("synthesised no audio")

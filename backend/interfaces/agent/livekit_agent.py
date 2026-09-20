@@ -183,16 +183,28 @@ def _static_config(settings: Settings) -> StaticConfig:
     return _static
 
 
-def main() -> None:
-    settings = get_settings()
-    _static_config(settings)
-    if settings.endpointer is EndpointerKind.SMART_TURN:
-        # onnxruntime's import costs ~100 ms and would otherwise run on a job thread with
-        # the GIL held, stalling every call already in progress. The weights follow on the
-        # decision pool.
+def _prewarm_endpointing() -> None:
+    """Loads Smart Turn whatever ENDPOINTER says, because any caller may ask for it: the
+    browser offers every endpointer the backend knows and /token accepts them all. Left to
+    the first call that selects it, onnxruntime's ~100 ms import runs on a job thread with
+    the GIL held, stalling five frames of audio in every call already in progress.
+
+    On its own thread so worker start-up waits for neither the import nor the 8.7 MB of
+    weights; both are cached for the life of the process.
+    """
+    try:
         from backend.infrastructure.endpointing import smart_turn
 
         smart_turn.warm()
+    except Exception:
+        # A worker that cannot load it still answers calls, at the silence ceiling.
+        log.warning("Smart Turn could not be pre-loaded", exc_info=True)
+
+
+def main() -> None:
+    settings = get_settings()
+    _static_config(settings)
+    threading.Thread(target=_prewarm_endpointing, name="smart-turn-prewarm", daemon=True).start()
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,

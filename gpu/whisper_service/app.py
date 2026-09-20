@@ -23,6 +23,7 @@ import contextlib
 import json
 import logging
 import os
+import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -315,6 +316,10 @@ class VllmRealtimeSession:
         self._ws: ClientConnection | None = None
         self._open = contextlib.ExitStack()
         self._failure: Exception | None = None
+        self._turn = threading.Lock()
+        """Held across a step. Cancelling an interim releases its pool slot but not the
+        thread already inside `advance`, so a flush arriving a frame later would otherwise
+        call recv on this socket from a second thread, which websockets.sync refuses."""
 
     def feed(self, pcm: bytes) -> None:
         self._pending.append(pcm)
@@ -327,7 +332,8 @@ class VllmRealtimeSession:
         try:
             self._run(self._commit)
         finally:
-            self._close()
+            with self._turn:
+                self._close()
         return self._text.strip()
 
     def _commit(self) -> None:
@@ -335,15 +341,16 @@ class VllmRealtimeSession:
         self._drain_until(time.monotonic() + self._flush_timeout_s)
 
     def _run(self, step: Callable[[], None]) -> None:
-        if self._failure is not None:
-            raise self._failure
-        try:
-            self._send_audio()
-            step()
-        except Exception as exc:
-            self._failure = exc
-            self._close()
-            raise
+        with self._turn:
+            if self._failure is not None:
+                raise self._failure
+            try:
+                self._send_audio()
+                step()
+            except Exception as exc:
+                self._failure = exc
+                self._close()
+                raise
 
     def _connection(self) -> ClientConnection:
         if self._ws is None:

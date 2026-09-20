@@ -188,6 +188,17 @@ async def test_kokoro_service_health_and_metrics() -> None:
     assert "kokoro_waiting" in metrics and "kokoro_first_byte_ms" in metrics
 
 
+async def test_health_is_probed_with_a_voice_the_loaded_engine_speaks() -> None:
+    """gpu/README.md recommends running one CUDA speech engine, and Qwen3-TTS alone speaks
+    no `af_heart`. Probing the request default made /health/deep 503 forever there, and
+    runpod/start.sh waits on it without a timeout."""
+    async with (
+        run_asgi(create_app((StubQwen,), workers=1)) as host,
+        httpx.AsyncClient(base_url=f"http://{host}") as client,
+    ):
+        assert (await client.get("/health/deep")).json()["status"] == "ok"
+
+
 @pytest.mark.parametrize(("voice", "hz"), [("af_heart", StubSynth.hz), (GERMAN_VOICE, StubQwen.hz)])
 async def test_the_voice_chooses_the_engine_that_speaks_it(voice: str, hz: float) -> None:
     async with (

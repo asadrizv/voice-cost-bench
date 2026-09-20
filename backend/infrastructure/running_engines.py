@@ -25,7 +25,9 @@ class HttpRunningEngines:
         self._urls = urls
         self._clock = clock
         self._ttl_s = ttl_s
-        self._client = client
+        self._given_client = client
+        self._client: httpx.AsyncClient | None = client
+        self._client_loop: asyncio.AbstractEventLoop | None = None
         self._answers: dict[ComponentKind, tuple[float, asyncio.Task[list[Engine]]]] = {}
 
     async def report(self, kind: ComponentKind) -> list[Engine]:
@@ -40,16 +42,21 @@ class HttpRunningEngines:
         # Shielded: one caller giving up must not cancel the probe the others are waiting on.
         return await asyncio.shield(answered[1])
 
-    def _http(self) -> httpx.AsyncClient:
+    def _http(self, loop: asyncio.AbstractEventLoop) -> httpx.AsyncClient:
         """Built on the first probe, not in __init__: the agent builds a container per call
-        and never asks, so an eager client would leak a connection pool per call."""
-        if self._client is None:
+        and never asks, so an eager client would leak a connection pool per call. Rebuilt
+        with the loop for the same reason the answers are — a client bound to a loop that
+        has closed raises RuntimeError, which is not an answer about the service."""
+        if self._given_client is not None:
+            return self._given_client
+        if self._client is None or self._client_loop is not loop:
             self._client = httpx.AsyncClient(timeout=httpx.Timeout(2.0))
+            self._client_loop = loop
         return self._client
 
     async def _ask(self, url: str) -> list[Engine]:
         try:
-            response = await self._http().get(url)
+            response = await self._http(asyncio.get_running_loop()).get(url)
             response.raise_for_status()
             return [Engine(str(e["id"]), str(e["model"])) for e in response.json()["engines"]]
         except httpx.HTTPStatusError as exc:

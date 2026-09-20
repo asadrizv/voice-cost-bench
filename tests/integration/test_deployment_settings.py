@@ -80,6 +80,19 @@ def test_the_gpu_compose_points_each_cuda_backend_at_the_server_that_serves_it(
     assert VllmOmniQwen3TtsSynthesizer().base_url == f"http://qwen3-tts-vllm:{speech_port}"
 
 
+def test_every_compose_command_written_as_one_string_has_a_shell_to_run_it() -> None:
+    """A folded block under `command:` is one list element, and Docker execs a list element
+    as argv[0]. Without `entrypoint: [/bin/sh, -c]` the whole command line is looked up as
+    a binary: `executable file not found`, then a restart loop on a GPU pod."""
+    services = yaml.safe_load((REPO_ROOT / "gpu" / "docker-compose.gpu.yml").read_text())[
+        "services"
+    ]
+    for name, service in services.items():
+        command = service.get("command")
+        if isinstance(command, list) and any(" " in str(part) for part in command):
+            assert service.get("entrypoint"), f"{name} runs a shell command with no shell"
+
+
 def test_the_environment_names_the_weights_each_cuda_backend_expects_to_be_served(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
