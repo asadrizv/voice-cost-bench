@@ -8,7 +8,7 @@ import json
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import httpx
 import numpy as np
@@ -114,8 +114,9 @@ async def qwen3_tts() -> AsyncIterator[Impl]:
         yield Impl(KokoroTts(f"http://{host}"), GERMAN_VOICE, StubQwen.hz)
 
 
-def omni_server(**kwargs: object) -> FakeVllmOmniSpeech:
-    return FakeVllmOmniSpeech(audio=lambda text: to_pcm16(fake_audio(text, StubQwen.hz)), **kwargs)  # type: ignore[arg-type]
+def omni_server(**kwargs: Any) -> FakeVllmOmniSpeech:
+    """A vLLM-Omni server whose model is the tone this suite tells Qwen3-TTS apart by."""
+    return FakeVllmOmniSpeech(audio=lambda text: to_pcm16(fake_audio(text, StubQwen.hz)), **kwargs)
 
 
 @asynccontextmanager

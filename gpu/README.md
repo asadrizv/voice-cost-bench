@@ -81,7 +81,9 @@ entry's `version` is fixed configuration, and a benchmark run has to say which r
 produced its numbers. `voxtral-vllm` holds nothing on the card itself: it opens a WebSocket
 to vLLM's `/v1/realtime` per utterance, sends base64 PCM16 at 16 kHz as the caller speaks,
 and commits with `final: true` on a flush. If that server is unreachable the service fails
-its warm-up and refuses to start, rather than answering every flush with silence.
+its warm-up and refuses to start, rather than answering every flush with silence. The 480 ms
+transcription delay above is the mlx-audio path's setting: a vLLM realtime session carries
+only a model, so the CUDA path runs at whatever delay its server was started with.
 
 ### Voxtral against Whisper, measured (#29)
 
