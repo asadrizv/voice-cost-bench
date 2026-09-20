@@ -279,17 +279,21 @@ def test_an_engine_this_service_cannot_run_is_refused_at_startup(
         enabled_synthesizers()
 
 
-async def test_the_cuda_engine_asks_vllm_omni_to_stream_the_designed_voice_as_pcm() -> None:
+async def test_the_cuda_engine_asks_vllm_omni_to_stream_the_designed_voice_as_pcm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """VoiceDesign carries the voice in `instructions`, and the stream has to be raw PCM at
     this service's rate: a stream_format the server frames differently, or a rate it
     resamples to, would reach the caller as noise under the x-sample-rate this service sets."""
+    monkeypatch.delenv("QWEN3_TTS_VLLM_MODEL", raising=False)
     server = omni_server()
     async with omni_service(server) as host, httpx.AsyncClient(base_url=f"http://{host}") as client:
         await client.post("/v1/synthesize", json={"text": "Guten Tag.", "voice": GERMAN_VOICE})
 
     clara = load_voices(VOICES_PATH)["clara_de"]
     assert server.requests[-1] == {
-        "model": VllmOmniQwen3TtsSynthesizer().served_model,
+        # Qwen's VoiceDesign checkpoint, the one this backend asks a server to be serving.
+        "model": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
         "input": "Guten Tag.",
         "response_format": "pcm",
         "stream": True,
@@ -339,10 +343,13 @@ async def test_the_cuda_engine_refuses_a_speed_vllm_omni_cannot_stream() -> None
     assert "1.0" in response.json()["error"]
 
 
-async def test_the_cuda_engine_is_reported_as_qwen3_tts_by_the_runtime_that_served_it() -> None:
+async def test_the_cuda_engine_is_reported_as_qwen3_tts_by_the_runtime_that_served_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The engine is the one the Apple Silicon backend runs, so /transparency names the same
     catalogue entry; the model says which runtime produced the numbers, which the
     catalogue's version -- fixed configuration -- cannot."""
+    monkeypatch.delenv("QWEN3_TTS_VLLM_MODEL", raising=False)
     async with (
         omni_service(omni_server()) as host,
         httpx.AsyncClient(base_url=f"http://{host}") as client,
@@ -351,7 +358,7 @@ async def test_the_cuda_engine_is_reported_as_qwen3_tts_by_the_runtime_that_serv
 
     assert engines == [
         {"id": "kokoro", "model": "hexgrad/Kokoro-82M"},
-        {"id": "qwen3-tts", "model": f"{VllmOmniQwen3TtsSynthesizer().served_model} (vLLM-Omni)"},
+        {"id": "qwen3-tts", "model": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign (vLLM-Omni)"},
     ]
 
 

@@ -99,7 +99,7 @@ class FakeVllmRealtime:
     """Emits an error event instead of the next delta, as a dying engine does."""
 
     models: list[str] = field(default_factory=list)
-    audio_bytes: int = 0
+    audio: bytearray = field(default_factory=bytearray)
     generations: int = 0
 
     def app(self) -> FastAPI:
@@ -119,7 +119,7 @@ class FakeVllmRealtime:
                 if kind == "session.update":
                     self.models.append(event.get("model"))
                 elif kind == "input_audio_buffer.append":
-                    self.audio_bytes += len(base64.b64decode(event["audio"]))
+                    self.audio += base64.b64decode(event["audio"])
                     chunks += 1
                     if chunks == self.fail_after_chunks:
                         await ws.send_json({"type": "error", "error": "engine died"})

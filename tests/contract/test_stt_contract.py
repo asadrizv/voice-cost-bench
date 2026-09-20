@@ -406,19 +406,28 @@ async def test_the_cuda_engine_is_reported_as_voxtral_by_the_runtime_that_served
     ]
 
 
-async def test_the_cuda_engine_sends_the_realtime_server_the_model_and_the_callers_audio() -> None:
+async def test_the_cuda_engine_sends_the_realtime_server_the_model_and_the_callers_audio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The wire format is vLLM's: the model is named before any commit, and the audio is
-    base64 PCM16 at 16 kHz, so what the server decodes is what the caller said."""
+    base64 PCM16 at 16 kHz, so the samples the server decodes are the ones the caller sent.
+    They survive a round trip through float32, which the service's own protocol is in, to
+    within the last bit."""
+    monkeypatch.delenv("VOXTRAL_VLLM_MODEL", raising=False)
     server = FakeVllmRealtime(text=UTTERANCE)
     pcm, _ = read_wav(AUDIO)
 
     async with realtime_service(server) as stt:
-        sent = server.audio_bytes
+        warmed = len(server.audio)
         await collect(stt.stream(speech_then(FlushSignal()), "en"))
 
-    assert server.models == [VllmVoxtralTranscriber().served_model] * 2  # warm-up, then the call
-    assert server.audio_bytes - sent == len(pcm)
+    # The repo id vLLM's own Voxtral recipe serves, and the default this service asks for.
+    assert server.models == ["mistralai/Voxtral-Mini-4B-Realtime-2602"] * 2  # warm-up, then call
     assert server.generations == 2
+    decoded = np.frombuffer(server.audio[warmed:], dtype="<i2").astype(int)
+    spoken = np.frombuffer(pcm, dtype="<i2").astype(int)
+    assert decoded.size == spoken.size
+    assert np.abs(decoded - spoken).max() <= 1
 
 
 async def test_a_realtime_server_that_answers_nothing_still_answers_the_flush_once() -> None:
