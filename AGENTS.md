@@ -1,6 +1,7 @@
 # voice-cost-bench
 
-See `README.md` for what this is and how to run it.
+See `README.md` for what this is and how to run it. This file configures coding agents
+working in this repo.
 
 ## Agent skills
 
