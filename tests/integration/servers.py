@@ -101,8 +101,10 @@ class FakeVllmRealtime:
     silent: bool = False
     """Accepts audio and answers nothing, as a server with no speech to report does."""
     fail_after_chunks: int | None = None
-    """Emits an error event instead of the next delta, as a dying engine does."""
+    """Emits an error event instead of the next delta, as a dying engine does. Counted over
+    the server's life, not per connection, so an engine can die after the service is up."""
 
+    appends: int = 0
     models: list[str] = field(default_factory=list)
     audio: bytearray = field(default_factory=bytearray)
     generations: int = 0
@@ -114,7 +116,7 @@ class FakeVllmRealtime:
         async def realtime(ws: WebSocket) -> None:
             await ws.accept()
             await ws.send_json({"type": "session.created", "id": "sess-fake", "created": 0})
-            words, said, chunks, generating = self.text.split(), 0, 0, False
+            words, said, generating = self.text.split(), 0, False
             while True:
                 try:
                     event = await ws.receive_json()
@@ -125,8 +127,8 @@ class FakeVllmRealtime:
                     self.models.append(event.get("model"))
                 elif kind == "input_audio_buffer.append":
                     self.audio += base64.b64decode(event["audio"])
-                    chunks += 1
-                    if chunks == self.fail_after_chunks:
+                    self.appends += 1
+                    if self.appends == self.fail_after_chunks:
                         await ws.send_json({"type": "error", "error": "engine died"})
                     elif generating and not self.silent and said < len(words):
                         await ws.send_json(

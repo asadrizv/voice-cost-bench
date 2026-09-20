@@ -524,6 +524,44 @@ async def test_a_realtime_server_that_accepts_and_says_nothing_gives_the_model_t
         assert time.monotonic() - started < 2  # the session's own timeout, not this one's
 
 
+async def test_the_deep_health_check_names_what_the_realtime_server_said() -> None:
+    """The failure is a server away, so the operator needs the server's own words here; a
+    bare 503 would send them to the wrong logs."""
+    server = FakeVllmRealtime(text=UTTERANCE, fail_after_chunks=2)  # warm-up passes, this does not
+
+    async with run_asgi(server.app()) as vllm:
+        transcriber = VllmVoxtralTranscriber(
+            url=f"ws://{vllm}/v1/realtime", flush_timeout_s=FLUSH_TIMEOUT_S
+        )
+        async with (
+            run_asgi(create_app(lambda: transcriber)) as host,
+            httpx.AsyncClient(base_url=f"http://{host}") as client,
+        ):
+            health = await client.get("/health/deep")
+
+    assert health.status_code == 503
+    assert "engine died" in health.json()["error"]
+
+
+def test_a_realtime_server_that_never_finishes_the_handshake_gives_the_model_thread_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A socket that accepts and leaves the upgrade unanswered is the other way a wedged
+    server takes the one model thread with it."""
+    monkeypatch.setattr(whisper_service, "VLLM_OPEN_TIMEOUT_S", 0.3)
+    with socket.socket() as listening:
+        listening.bind(("127.0.0.1", 0))
+        listening.listen(1)
+        port = listening.getsockname()[1]
+        session = VllmVoxtralTranscriber(url=f"ws://127.0.0.1:{port}/v1/realtime").session()
+        session.feed(to_samples(WARMUP_PCM))
+        started = time.monotonic()
+        with pytest.raises(TimeoutError):
+            session.finish()
+
+    assert time.monotonic() - started < 2  # the session's own timeout, not the suite's
+
+
 def test_a_realtime_server_that_is_not_there_fails_the_utterance_rather_than_emptying_it() -> None:
     """The service's warm-up runs this path, so a GPU node whose vLLM server is missing
     refuses to start instead of answering every flush with silence."""
