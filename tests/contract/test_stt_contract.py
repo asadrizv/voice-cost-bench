@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import socket
 import threading
+import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
@@ -512,13 +513,15 @@ async def test_a_realtime_server_that_accepts_and_says_nothing_gives_the_model_t
     @mute.websocket("/v1/realtime")
     async def accept_only(ws: WebSocket) -> None:
         await ws.accept()
-        await asyncio.sleep(5.0)
+        await asyncio.sleep(1.0)
 
     async with run_asgi(mute) as host:
         session = VllmVoxtralTranscriber(url=f"ws://{host}/v1/realtime").session()
         session.feed(to_samples(WARMUP_PCM))
+        started = time.monotonic()
         with pytest.raises(TimeoutError):
             await asyncio.wait_for(asyncio.to_thread(session.finish), 3)
+        assert time.monotonic() - started < 2  # the session's own timeout, not this one's
 
 
 def test_a_realtime_server_that_is_not_there_fails_the_utterance_rather_than_emptying_it() -> None:
