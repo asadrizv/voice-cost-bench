@@ -21,3 +21,4 @@ frontend/e2e/*.wav
 mutants/
 coverage.xml
 .next-build/
+frontend/.next-build/
