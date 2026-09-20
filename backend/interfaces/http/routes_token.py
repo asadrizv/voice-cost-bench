@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from backend.application.services.endpointing import EndpointerKind
 from backend.domain.value_objects.pipeline_kind import PipelineKind
 from backend.infrastructure.config.settings import Settings
+from backend.infrastructure.pipeline_factory import PipelineNotSelectable, require_selectable
 from backend.interfaces.container import Container
 from backend.interfaces.http.deps import container, settings
 
@@ -45,6 +46,10 @@ def create_token(
     carried by the token's room configuration: an explicit dispatch to our agent with the
     choice as job metadata, so no other agent on the LiveKit project picks the call up."""
     pipeline = body.pipeline or s.pipeline
+    try:
+        require_selectable(s, pipeline)
+    except PipelineNotSelectable as exc:
+        raise HTTPException(409, str(exc)) from None
     persona = body.persona or s.persona
     if persona not in c.personas.available():
         raise HTTPException(404, f"unknown persona {persona}")

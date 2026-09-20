@@ -12,6 +12,8 @@ import { useLiveMetrics } from "@/lib/useLiveMetrics";
 
 type CallStatus = { state: string; reason?: string; ended_by?: string };
 
+const PIPELINES: Pipeline[] = ["api", "selfhosted"];
+
 function StatusListener({ onStatus }: { onStatus: (s: CallStatus) => void }) {
   useDataChannel("call-status", (msg) => {
     try {
@@ -34,6 +36,7 @@ export default function CallPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const live = useLiveMetrics(callId);
   const [env, setEnv] = useState<{ local: boolean; simulated: boolean }>({ local: false, simulated: false });
+  const [pipelines, setPipelines] = useState<Pipeline[]>(PIPELINES);
   // Calling before the server's default pipeline arrives would silently use the toggle's
   // initial value; a keyless API pipeline then rejects the call.
   const [configLoaded, setConfigLoaded] = useState(false);
@@ -43,6 +46,11 @@ export default function CallPage() {
       .then((c) => {
         setEnv({ local: Boolean(c.selfhosted_on_local_machine), simulated: Boolean(c.simulated) });
         if (c.default_pipeline === "api" || c.default_pipeline === "selfhosted") setPipeline(c.default_pipeline);
+        // Under the EU-only profile the server serves one pipeline and refuses the other,
+        // so offering both would hand the caller a button that always fails.
+        const selectable = Array.isArray(c.selectable_pipelines) ? c.selectable_pipelines : [];
+        const offered = PIPELINES.filter((p) => selectable.includes(p));
+        if (offered.length) setPipelines(offered);
       })
       .catch(() => undefined)
       .finally(() => setConfigLoaded(true));
@@ -81,7 +89,7 @@ export default function CallPage() {
           </p>
         </div>
         <span className="spacer" />
-        <PipelineToggle value={pipeline} onChange={setPipeline} disabled={!!session} />
+        <PipelineToggle value={pipeline} options={pipelines} onChange={setPipeline} disabled={!!session} />
         <select aria-label="Language" value={persona} disabled={!!session} onChange={(e) => setPersona(e.target.value)}>
           <option value="law_firm">English</option>
           <option value="law_firm_de">Deutsch</option>

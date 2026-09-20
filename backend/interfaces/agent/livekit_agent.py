@@ -23,7 +23,7 @@ from backend.domain.value_objects.audio import AudioChunk
 from backend.domain.value_objects.pipeline_kind import PipelineKind
 from backend.infrastructure.config.settings import get_settings
 from backend.infrastructure.persistence.postgres_call_repository import SqlCallRepository
-from backend.infrastructure.pipeline_factory import MissingCredentials
+from backend.infrastructure.pipeline_factory import MissingCredentials, PipelineNotSelectable
 from backend.infrastructure.telemetry.http_metrics_sink import HttpMetricsSink
 from backend.infrastructure.transport.livekit_audio import (
     OUTPUT_SAMPLE_RATE,
@@ -108,7 +108,12 @@ async def entrypoint(ctx: JobContext) -> None:
             call_ctx = await container.start_call.execute(
                 pipeline, persona, source="browser", call_id=ctx.room.name
             )
-        except (BudgetExceeded, CapacityExceeded, MissingCredentials) as exc:
+        except (
+            BudgetExceeded,
+            CapacityExceeded,
+            MissingCredentials,
+            PipelineNotSelectable,
+        ) as exc:
             log.warning("call rejected: %s", exc)
             await _status(ctx, state="rejected", reason=str(exc))
             await asyncio.sleep(1)  # let the data message reach the browser

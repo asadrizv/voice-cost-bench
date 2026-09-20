@@ -5,6 +5,7 @@ import json
 import shutil
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
+from typing import Any
 
 import httpx
 import jwt
@@ -601,7 +602,9 @@ VOXTRAL_ON_ITS_VENDORS_CLOUD = """    host: gpu_host
       gib: 9.98"""
 
 
-def eu_config(tmp_path: Path, carrier: str = "sipgate", edit: tuple[str, str] | None = None) -> Path:
+def eu_config(
+    tmp_path: Path, carrier: str = "sipgate", edit: tuple[str, str] | None = None
+) -> Path:
     """The shipped configuration with the German carrier selected: everything the selfhosted
     pipeline touches is then EU-resident, so each edit isolates one component that isn't.
     sipgate sells inbound by the month, so an operator enters their contracted per-minute
@@ -713,3 +716,63 @@ def test_a_deployment_without_the_profile_may_leave_the_eu(tmp_path: Path) -> No
 
     validate_static_config(settings)
     create_app(settings, pipelines=StaticPipelines({}))
+
+
+async def transparency_body(settings: Settings) -> dict[str, Any]:
+    app = create_app(settings, pipelines=StaticPipelines({}))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        body: dict[str, Any] = (await client.get("/transparency")).json()
+    return body
+
+
+async def test_an_eu_only_deployment_starts_and_transparency_shows_nothing_leaving_the_eu(
+    tmp_path: Path,
+) -> None:
+    settings = eu_settings(eu_config(tmp_path))
+
+    validate_static_config(settings)
+    body = await transparency_body(settings)
+
+    assert body["eu_only"] is True
+    assert set(body["pipelines"]) == {"selfhosted"}
+    components = body["pipelines"]["selfhosted"]
+    assert [c["kind"] for c in components] == KINDS
+    assert [c["leaves_eu"] for c in components] == [False] * len(KINDS)
+    assert {c["id"] for c in components} == {
+        "sipgate",
+        "faster-whisper",
+        "vllm:Qwen/Qwen3.5-9B",
+        "kokoro",
+        "livekit-server",
+        "in-memory",
+    }
+
+
+async def test_a_deployment_without_the_profile_still_publishes_both_pipelines(
+    tmp_path: Path,
+) -> None:
+    body = await transparency_body(SETTINGS.model_copy(update={"config_dir": eu_config(tmp_path)}))
+
+    assert body["eu_only"] is False
+    assert set(body["pipelines"]) == {"api", "selfhosted"}
+
+
+async def test_a_caller_cannot_ask_for_a_pipeline_the_eu_only_profile_refused(
+    tmp_path: Path,
+) -> None:
+    """The browser picks a pipeline per call, so the profile has to close that choice:
+    otherwise a toggle would route the caller straight to the vendors it refused."""
+    app = create_app(eu_settings(eu_config(tmp_path)), pipelines=StaticPipelines({}))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        refused = await client.post("/token", json={"pipeline": "api"})
+        allowed = await client.post("/token", json={"pipeline": "selfhosted"})
+        default = await client.post("/token", json={})
+
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == (
+        "EU_ONLY serves the selfhosted pipeline only; the api pipeline is not available"
+    )
+    assert allowed.json()["pipeline"] == "selfhosted"
+    assert default.json()["pipeline"] == "selfhosted"

@@ -25,6 +25,21 @@ class MissingCredentials(RuntimeError):
     pass
 
 
+class PipelineNotSelectable(RuntimeError):
+    pass
+
+
+def require_selectable(settings: Settings, kind: PipelineKind) -> None:
+    """The other half of the EU-only profile: raises PipelineNotSelectable for a pipeline
+    the profile never verified, so a per-call choice cannot reach one whose components
+    startup would have refused."""
+    if kind not in settings.selectable_pipelines:
+        raise PipelineNotSelectable(
+            f"EU_ONLY serves the {settings.pipeline.value} pipeline only; "
+            f"the {kind.value} pipeline is not available"
+        )
+
+
 def _api(s: Settings) -> Pipeline:
     missing = [
         name
@@ -96,6 +111,7 @@ class PipelineFactory:
         self._cache: dict[PipelineKind, Pipeline] = {}
 
     def resolve(self, kind: PipelineKind) -> Pipeline:
+        require_selectable(self._settings, kind)
         if kind not in self._cache:
             self._cache[kind] = self._builders[kind](self._settings)
         return self._cache[kind]

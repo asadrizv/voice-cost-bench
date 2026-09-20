@@ -4,7 +4,6 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
 
-from backend.domain.value_objects.pipeline_kind import PipelineKind
 from backend.infrastructure.config.settings import Settings
 from backend.interfaces.container import Container
 from backend.interfaces.http.deps import container, settings
@@ -23,7 +22,8 @@ async def transparency(
     (catalogue_version bumps on a breaking change):
 
         {"catalogue_version": 1, "simulated": bool, "selfhosted_on_local_machine": bool,
-         "pipelines": {"api" | "selfhosted": [
+         "eu_only": bool,  # true: every component below is EU-resident, or startup failed
+         "pipelines": {"api" | "selfhosted": [  # only the pipelines a call may select
             {"kind": "telephony" | "stt" | "llm" | "tts" | "orchestration" | "storage",
              "id": str, "vendor": str, "model": str, "version": str, "region": str,
              "licence": str, "leaves_eu": bool,
@@ -40,6 +40,7 @@ async def transparency(
         "catalogue_version": c.catalogue.version(),
         "simulated": s.simulate_providers,
         "selfhosted_on_local_machine": s.selfhosted_on_local_machine,
+        "eu_only": s.eu_only,
         "pipelines": {
             kind.value: [
                 {
@@ -49,6 +50,6 @@ async def transparency(
                 }
                 for d in await c.describe_components.execute(kind)
             ]
-            for kind in PipelineKind
+            for kind in s.selectable_pipelines
         },
     }

@@ -37,6 +37,8 @@ async def config(
     card = c.calculator.rate_card
     return {
         "default_pipeline": s.pipeline.value,
+        "selectable_pipelines": [k.value for k in s.selectable_pipelines],
+        "eu_only": s.eu_only,
         "personas": c.personas.available(),
         "endpointer": s.endpointer.value,
         "rate_card_verified_on": card.verified_on,
